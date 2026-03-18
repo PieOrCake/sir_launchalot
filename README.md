@@ -1,6 +1,6 @@
 # Sir Launchalot
 
-A C++/Qt6 application for running multiple Guild Wars 2 accounts simultaneously on Linux. Requires a Lutris GW2 installation. Distributed as an AppImage.
+A C++/Qt6 application for running multiple Guild Wars 2 accounts simultaneously (aka multiboxing) on Linux. Requires a Lutris GW2 installation. Distributed as an AppImage.
 
 ## AI Notice
 
@@ -16,9 +16,9 @@ If an LLM creating software upsets you, then perhaps this repo isn't for you. Mo
 
 - **Lutris integration** — auto-detects your Lutris GW2 installation and launches main via Lutris
 - **Automatic credential capture** — Setup Wizard walks you through logging in as each alt
-- **Per-account addon toggle** — enable or disable addons (ArcDPS, ReShade, etc.) per alt
+- **Per-account addon toggle** — enable or disable addons (ArcDPS, Nexus, etc.) per alt
 - **Graphics settings persistence** — each alt remembers its own graphics settings between sessions
-- **Patch detection** — detects when GW2 updates and prompts to update alt credentials
+- **Patch detection** — detects when GW2 updates and prompts to update alts
 - **External app launcher** — launch companion apps (Discord, TeamSpeak, etc.) from the same UI
 - **Instance monitoring** — track running accounts with start/stop controls
 - Runs on any Linux distro via AppImage
