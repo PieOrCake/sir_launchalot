@@ -1,0 +1,4 @@
+build/
+*.AppImage
+CMakeUserPresets.json
+.cache/

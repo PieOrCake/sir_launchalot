@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Sir Launchalot
+Comment=Guild Wars 2 multibox launcher
+Exec=sir-launchalot
+Icon=sir-launchalot
+Categories=Game;Utility;
+Terminal=false
+StartupWMClass=sir-launchalot

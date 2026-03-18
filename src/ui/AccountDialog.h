@@ -1,0 +1,30 @@
+#ifndef ACCOUNTDIALOG_H
+#define ACCOUNTDIALOG_H
+
+#include <QCheckBox>
+#include <QDialog>
+#include <QLineEdit>
+
+#include "core/AccountManager.h"
+
+class AccountDialog : public QDialog
+{
+    Q_OBJECT
+
+public:
+    explicit AccountDialog(QWidget *parent = nullptr);
+
+    void setAccount(const AccountManager::Account &account);
+    AccountManager::Account account() const;
+
+private:
+    void setupUi();
+
+    bool m_editMode = false;
+    QString m_accountId;
+    QLineEdit *m_nameEdit;
+    QCheckBox *m_mainCheck;
+    QCheckBox *m_enableAddonsCheck;
+};
+
+#endif // ACCOUNTDIALOG_H
