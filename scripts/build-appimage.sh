@@ -7,9 +7,24 @@ BUILD_DIR="$PROJECT_DIR/build"
 APPDIR="$BUILD_DIR/AppDir"
 TOOLS_DIR="$BUILD_DIR/tools"
 
+SKIP_BUILD=false
+for arg in "$@"; do
+    case "$arg" in
+        --skip-build) SKIP_BUILD=true ;;
+    esac
+done
+
 echo "=== Sir Launchalot AppImage Builder ==="
 
-# Clean previous build
+# Extract version from CMakeLists.txt
+VERSION=$(grep -oP 'project\(sir-launchalot VERSION \K[0-9.]+' "$PROJECT_DIR/CMakeLists.txt")
+if [ -z "$VERSION" ]; then
+    echo "ERROR: Could not extract version from CMakeLists.txt"
+    exit 1
+fi
+echo "Version: $VERSION"
+
+# Clean previous AppDir and AppImage
 rm -rf "$APPDIR"
 rm -f "$BUILD_DIR"/Sir_Launchalot*.AppImage
 mkdir -p "$BUILD_DIR" "$TOOLS_DIR"
@@ -24,10 +39,12 @@ if [ ! -f "$LINUXDEPLOY" ]; then
     chmod +x "$LINUXDEPLOY"
 fi
 
-# Build the project
-echo "Building project..."
-cmake -B "$BUILD_DIR" -S "$PROJECT_DIR" -DCMAKE_BUILD_TYPE=Release
-cmake --build "$BUILD_DIR" --parallel "$(nproc)"
+if [ "$SKIP_BUILD" = false ]; then
+    # Build the project
+    echo "Building project..."
+    cmake -B "$BUILD_DIR" -S "$PROJECT_DIR" -DCMAKE_BUILD_TYPE=Release
+    cmake --build "$BUILD_DIR" --parallel "$(nproc)"
+fi
 
 # Install into AppDir
 echo "Installing into AppDir..."
@@ -81,7 +98,7 @@ Libraries = lib
 EOF
 
 export DISABLE_COPYRIGHT_FILES_DEPLOYMENT=1
-export OUTPUT="$BUILD_DIR/Sir_Launchalot-x86_64.AppImage"
+export OUTPUT="$BUILD_DIR/Sir_Launchalot-${VERSION}-x86_64.AppImage"
 
 echo "Creating AppImage..."
 
@@ -101,3 +118,6 @@ done < <(find "$APPDIR_PLUGINS" -name '*.so' -print0)
 echo ""
 echo "=== AppImage created: $OUTPUT ==="
 echo "Run with: chmod +x '$OUTPUT' && '$OUTPUT'"
+
+# Create unversioned symlink for convenience
+ln -sf "$(basename "$OUTPUT")" "$BUILD_DIR/Sir_Launchalot-x86_64.AppImage"

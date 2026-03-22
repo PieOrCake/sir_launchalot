@@ -55,6 +55,17 @@ QString AccountManager::wineRunnerPath() const
     return m_wineRunnerPath;
 }
 
+void AccountManager::setProtonPath(const QString &path)
+{
+    m_protonPath = path;
+    save();
+}
+
+QString AccountManager::protonPath() const
+{
+    return m_protonPath;
+}
+
 QString AccountManager::configFilePath() const
 {
     return m_configDir + "/accounts.json";
@@ -112,6 +123,7 @@ bool AccountManager::load()
     m_basePrefix = root.value("basePrefix").toString();
     m_gw2ExePath = root.value("gw2ExePath").toString();
     m_wineRunnerPath = root.value("wineRunnerPath").toString();
+    m_protonPath = root.value("protonPath").toString();
 
     return true;
 }
@@ -145,6 +157,7 @@ bool AccountManager::save() const
     root["basePrefix"] = m_basePrefix;
     root["gw2ExePath"] = m_gw2ExePath;
     root["wineRunnerPath"] = m_wineRunnerPath;
+    root["protonPath"] = m_protonPath;
 
     QFile file(configFilePath());
     if (!file.open(QIODevice::WriteOnly)) {

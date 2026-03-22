@@ -62,6 +62,8 @@ public:
     QString gw2ExePath() const;
     void setWineRunnerPath(const QString &path);
     QString wineRunnerPath() const;
+    void setProtonPath(const QString &path);
+    QString protonPath() const;
 
 signals:
     void accountAdded(const QString &id);
@@ -84,6 +86,7 @@ private:
     QString m_basePrefix;
     QString m_gw2ExePath;
     QString m_wineRunnerPath;
+    QString m_protonPath;
 };
 
 #endif // ACCOUNTMANAGER_H

@@ -1,6 +1,6 @@
 # Sir Launchalot
 
-A C++/Qt6 application for running multiple Guild Wars 2 accounts simultaneously (aka multiboxing) on Linux. Requires a Lutris GW2 installation. Distributed as an AppImage.
+A C++/Qt6 application for running multiple Guild Wars 2 accounts simultaneously (aka multiboxing) on Linux. Uses `umu-launcher` to run GW2 via Proton, with auto-detection of existing installations from Lutris, Heroic Games Launcher, and Faugus Launcher. Distributed as an AppImage.
 
 ## AI Notice
 
@@ -14,7 +14,8 @@ If an LLM creating software upsets you, then perhaps this repo isn't for you. Mo
 
 ## Features
 
-- **Lutris integration** — auto-detects your Lutris GW2 installation and launches main via Lutris
+- **Multi-launcher detection** — auto-detects GW2 installations from Lutris, Heroic Games Launcher, and Faugus Launcher
+- **umu-launcher integration** — launches all accounts (main and alts) via `umu-run` with Proton, giving direct process control and reliable exit detection
 - **Automatic credential capture** — Setup Wizard walks you through logging in as each alt
 - **Per-account addon toggle** — enable or disable addons (ArcDPS, Nexus, etc.) per alt
 - **Graphics settings persistence** — each alt remembers its own graphics settings between sessions
@@ -27,11 +28,14 @@ If an LLM creating software upsets you, then perhaps this repo isn't for you. Mo
 
 GW2 uses a mutex to prevent multiple instances. On Linux under Wine, each WINEPREFIX has its own mutex, so separate prefixes allow simultaneous launches.
 
-Sir Launchalot clones your base Lutris GW2 prefix via **rsync** for each alt account, sharing the large `Gw2.dat` file via symlink. The `-shareArchive` flag ensures `Gw2.dat` is opened in shared mode. Each alt gets its own credentials (`Local.dat`) and graphics settings, captured automatically.
+Sir Launchalot clones your base GW2 prefix via **rsync** for each alt account, sharing the large `Gw2.dat` file via symlink. The `-shareArchive` flag ensures `Gw2.dat` is opened in shared mode. Each alt gets its own credentials (`Local.dat`) and graphics settings, captured automatically.
+
+All accounts (main and alts) are launched via [`umu-launcher`](https://github.com/Open-Wine-Components/umu-launcher), which provides a unified Proton runtime. This means you don't need Lutris running to play — Sir Launchalot talks directly to `umu-run`.
 
 ## Requirements
 
-- A working GW2 installation managed by **Lutris**
+- **`umu-launcher`** (`umu-run`) — install from your distro's package manager or from [GitHub](https://github.com/Open-Wine-Components/umu-launcher)
+- An existing GW2 WINEPREFIX from **Lutris**, **Heroic Games Launcher**, or **Faugus Launcher**
 - `rsync` (installed by default on most distros)
 
 ## Running (AppImage)
@@ -43,7 +47,7 @@ chmod +x Sir_Launchalot-x86_64.AppImage
 ./Sir_Launchalot-x86_64.AppImage
 ```
 
-On first launch, the Setup Wizard will auto-detect your Lutris GW2 installation and create your main account.
+On first launch, the Setup Wizard will auto-detect your GW2 installation (from Lutris, Heroic, or Faugus) and create your main account.
 
 ## Building from Source
 
@@ -63,7 +67,7 @@ Requires `curl` for downloading linuxdeploy (cached after first run):
 ./scripts/build-appimage.sh
 ```
 
-The AppImage will be created at `build/Sir_Launchalot-x86_64.AppImage`.
+The AppImage will be created at `build/Sir_Launchalot-<version>-x86_64.AppImage`.
 
 ### Build Dependencies
 

@@ -38,7 +38,6 @@ ProcessManager::ProcessManager(OverlayManager *overlay,
     , m_accounts(accounts)
     , m_wine(wine)
 {
-    loadCapturedEnv();
 }
 
 ProcessManager::~ProcessManager()
@@ -56,14 +55,14 @@ int ProcessManager::launchDelay() const
     return m_launchDelay;
 }
 
-void ProcessManager::setLutrisGameId(int id)
+void ProcessManager::setProtonPath(const QString &path)
 {
-    m_lutrisGameId = id;
+    m_protonPath = path;
 }
 
-int ProcessManager::lutrisGameId() const
+QString ProcessManager::protonPath() const
 {
-    return m_lutrisGameId;
+    return m_protonPath;
 }
 
 bool ProcessManager::launchAccount(const QString &accountId,
@@ -80,48 +79,56 @@ bool ProcessManager::launchAccount(const QString &accountId,
     QString winePrefix;
 
     if (acct.isMain) {
-        // Main account always launches via Lutris
-        if (m_lutrisGameId <= 0) {
-            emit instanceError(accountId, "No Lutris game ID — run Setup Wizard to detect your GW2 installation");
-            return false;
-        }
-
+        // Main account launches via umu-run
         // Record Gw2.dat modification time for patch detection
         m_gw2DatPath = QFileInfo(exePath).absolutePath() + "/Gw2.dat";
         m_gw2DatMtimeBefore = QFileInfo(m_gw2DatPath).lastModified();
 
-        QString lutrisUri = QString("lutris:rungameid/%1").arg(m_lutrisGameId);
-        emit instanceOutput(accountId, QString("Launching via Lutris: %1\n").arg(lutrisUri));
+        emit instanceOutput(accountId, "=== Main account launch (umu-run) ===\n");
 
-        // Use xdg-open to launch via the desktop's URI handler.
-        // This spawns Lutris in a completely separate process context
-        // managed by the desktop environment — no env inheritance issues.
-        qint64 pid = 0;
-        if (!QProcess::startDetached("xdg-open", {lutrisUri},
-                                      QString(), &pid)) {
-            emit instanceError(accountId, "Failed to launch Lutris via xdg-open");
+        QStringList mainArgs;
+        mainArgs.append(acct.extraArgs);
+
+        QString scriptPath = writeUmuScript(accountId, basePrefix, exePath,
+                                             mainArgs, "umu-1284210", false);
+        if (scriptPath.isEmpty()) {
+            emit instanceError(accountId, "Failed to create launch script");
             return false;
         }
 
-        emit instanceOutput(accountId, QString("Lutris launched via xdg-open (PID %1)\n").arg(pid));
+        auto *proc = new QProcess(this);
+        proc->setProperty("accountId", accountId);
+        proc->setProperty("scriptPath", scriptPath);
+
+        connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                this, &ProcessManager::onProcessFinished);
+        connect(proc, &QProcess::errorOccurred,
+                this, &ProcessManager::onProcessError);
+        connect(proc, &QProcess::readyReadStandardOutput, this, [this, proc]() {
+            QString accountId = proc->property("accountId").toString();
+            emit instanceOutput(accountId, proc->readAllStandardOutput());
+        });
+        connect(proc, &QProcess::readyReadStandardError, this, [this, proc]() {
+            QString accountId = proc->property("accountId").toString();
+            emit instanceOutput(accountId, proc->readAllStandardError());
+        });
 
         InstanceInfo info;
         info.accountId = accountId;
-        info.state = InstanceState::Running;
-        info.pid = pid;
-        info.process = nullptr;  // detached — no QProcess to manage
-        info.launchTimer.start();
+        info.state = InstanceState::Starting;
+        info.process = proc;
         m_instances[accountId] = info;
 
-        // Start polling for game exit — check if wineserver is still alive
-        m_basePrefix = basePrefix;
-        if (!m_pollTimer) {
-            m_pollTimer = new QTimer(this);
-            connect(m_pollTimer, &QTimer::timeout,
-                    this, &ProcessManager::pollDetachedInstances);
+        proc->start("/bin/bash", {scriptPath});
+        if (!proc->waitForStarted(10000)) {
+            emit instanceError(accountId, "Failed to start launch script");
+            m_instances[accountId].state = InstanceState::Stopped;
+            QFile::remove(scriptPath);
+            return false;
         }
-        m_pollTimer->start(3000);  // check every 3 seconds
 
+        m_instances[accountId].pid = proc->processId();
+        m_instances[accountId].state = InstanceState::Running;
         emit instanceStarted(accountId);
         return true;
     } else {
@@ -278,61 +285,30 @@ bool ProcessManager::launchAccount(const QString &accountId,
         emit instanceOutput(accountId, "=== END Alt account launch ===\n");
     }
 
-    // Alt account launch via script
-    auto runner = m_wine->selectedRunner();
-    if (runner.path.isEmpty()) {
-        emit instanceError(accountId, "No Wine runner selected");
-        return false;
-    }
-
-    // Use captured Lutris env if available, otherwise fall back to buildEnvironment
-    QProcessEnvironment procEnv;
-    if (m_envCaptured) {
-        procEnv = m_capturedEnv;
-        // Set WINEPREFIX and STEAM_COMPAT_DATA_PATH to the overlay merged dir
-        procEnv.insert("WINEPREFIX", winePrefix);
-        procEnv.insert("STEAM_COMPAT_DATA_PATH", winePrefix);
-
-        // Derive PROTONPATH from WINELOADER if not already set.
-        // umu-run needs this to select the correct Proton version;
-        // without it, it defaults to UMU-Latest which causes prefix upgrades.
-        if (procEnv.value("PROTONPATH").isEmpty()) {
-            QString wineloader = procEnv.value("WINELOADER");
-            if (wineloader.contains("/files/bin/")) {
-                QString protonPath = wineloader.section("/files/bin/", 0, 0);
-                procEnv.insert("PROTONPATH", protonPath);
-                emit instanceOutput(accountId,
-                    QString("Derived PROTONPATH: %1\n").arg(protonPath));
-            }
-        }
-
-        emit instanceOutput(accountId, "Using captured Lutris environment\n");
-    } else {
-        procEnv = buildEnvironment(accountId, winePrefix);
-        emit instanceOutput(accountId, "WARNING: No captured Lutris env — using built env (may show wine updater)\n");
-    }
-
-    // For alt accounts, remap exe path to the clone prefix so Wine loads
+    // For alt accounts, remap exe path to the clone prefix so Wine/umu-run loads
     // DLLs from the clone directory (where addon files may have been removed)
     QString effectiveExePath = exePath;
     if (!acct.isMain && exePath.startsWith(basePrefix)) {
         QString relPath = exePath.mid(basePrefix.length());  // e.g. /drive_c/.../Gw2-64.exe
         effectiveExePath = winePrefix + relPath;
-        procEnv.insert("STEAM_COMPAT_INSTALL_PATH",
-                        QFileInfo(effectiveExePath).absolutePath());
     }
 
-    QStringList launchArgs = buildLaunchArgs(effectiveExePath, accountId);
-    QString workDir = QFileInfo(effectiveExePath).absolutePath();
+    // Build args: -shareArchive for alts, -autologin if saved Local.dat exists
+    QStringList gameArgs;
+    if (!acct.isMain) {
+        gameArgs << "-shareArchive";
+        QString savedLocalDat = m_overlay->dataDir() + "/" + accountId + "/saved/Local.dat";
+        if (QFile::exists(savedLocalDat))
+            gameArgs << "-autologin";
+    }
+    gameArgs.append(acct.extraArgs);
 
-    // Debug: log what we're about to launch
-    emit instanceOutput(accountId, QString("CMD: %1 %2\n").arg(runner.path, launchArgs.join(" ")));
-    emit instanceOutput(accountId, QString("CWD: %1\n").arg(workDir));
-    emit instanceOutput(accountId, QString("WINEPREFIX: %1\n").arg(winePrefix));
-
-    // Create a .desktop file so KDE shows this as a separate panel icon
+    // Each account gets a unique GAMEID so KDE can show separate panel icons
     uint idHash = qHash(accountId) % 10000;
     QString uniqueAppId = QString::number(1284210000 + idHash);
+    QString gameid = "umu-" + uniqueAppId;
+
+    // Create a .desktop file so KDE shows this as a separate panel icon
     QString windowClass = "steam_app_" + uniqueAppId;
     QString displayName = acct.displayName.isEmpty() ? accountId : acct.displayName;
     {
@@ -348,79 +324,15 @@ bool ProcessManager::launchAccount(const QString &accountId,
             ds << "Exec=true\n";
             ds << "StartupWMClass=" << windowClass << "\n";
             ds << "NoDisplay=true\n";
-            ds << "Icon=lutris_guild-wars-2\n";
+            ds << "Icon=gw2\n";
         }
     }
 
-    // Write the launch script
-    QString scriptPath = QDir::tempPath() + "/sir-launchalot-" + accountId + ".sh";
-    {
-        QFile script(scriptPath);
-        if (!script.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            emit instanceError(accountId, "Failed to create launch script");
-            return false;
-        }
-        QTextStream out(&script);
-        out << "#!/bin/bash\n";
-
-        // Only export Wine/game-specific vars from captured env.
-        // Display, session, and system vars are inherited from the parent
-        // process to avoid X11 auth and Vulkan issues.
-        QStringList exportKeys = {
-            "WINEPREFIX", "WINEARCH", "WINE", "WINELOADER",
-            "WINELOADERNOEXEC", "WINEDEBUG",
-            "WINEESYNC", "WINEFSYNC", "WINEDLLOVERRIDES",
-            "WINE_MONO_CACHE_DIR", "WINE_GECKO_CACHE_DIR",
-            "WINE_LARGE_ADDRESS_AWARE", "WINE_FULLSCREEN_FSR",
-            "PROTONPATH", "GAMEID", "STORE",
-            "STEAM_COMPAT_APP_ID", "STEAM_COMPAT_INSTALL_PATH",
-            "STEAM_COMPAT_DATA_PATH", "STEAM_COMPAT_CLIENT_INSTALL_PATH",
-            "STEAM_COMPAT_MOUNTS",
-            "DXVK_LOG_LEVEL", "DXVK_NVAPIHACK", "DXVK_ENABLE_NVAPI",
-            "PROTON_DXVK_D3D8", "PROTON_BATTLEYE_RUNTIME", "PROTON_EAC_RUNTIME",
-            "MANGOHUD", "MANGOHUD_DLSYM", "UMU_LOG",
-            "GST_PLUGIN_SYSTEM_PATH_1_0",
-            "WINE_GST_REGISTRY_DIR",
-            "MEDIACONV_AUDIO_DUMP_FILE", "MEDIACONV_AUDIO_TRANSCODED_FILE",
-            "MEDIACONV_VIDEO_DUMP_FILE", "MEDIACONV_VIDEO_TRANSCODED_FILE",
-            "__GL_SHADER_DISK_CACHE", "__GL_SHADER_DISK_CACHE_PATH",
-            "PULSE_LATENCY_MSEC",
-            "LD_LIBRARY_PATH",
-            "STAGING_SHARED_MEMORY",
-        };
-        for (const auto &key : exportKeys) {
-            QString val = procEnv.value(key);
-            if (val.isEmpty()) continue;
-            val.replace("'", "'\\''");
-            out << "export " << key << "='" << val << "'\n";
-        }
-
-        // Override GAMEID for proper KDE window class identification.
-        // Each account gets a unique numeric GAMEID so KDE can apply per-window rules.
-        out << "export GAMEID='umu-" << uniqueAppId << "'\n";
-        out << "export SteamAppId='" << uniqueAppId << "'\n";
-        out << "export STEAM_COMPAT_APP_ID='" << uniqueAppId << "'\n";
-
-        QString escapedWorkDir = workDir;
-        escapedWorkDir.replace("'", "'\\''");
-        out << "\ncd '" << escapedWorkDir << "'\n";
-
-        // Use the Wine binary from the captured/built env (WINE var) if available,
-        // otherwise fall back to our detected runner
-        QString wineBin = procEnv.value("WINE");
-        if (wineBin.isEmpty()) wineBin = runner.path;
-        QString escapedWineBin = wineBin;
-        escapedWineBin.replace("'", "'\\''");
-
-        out << "\nexec setsid --wait '" << escapedWineBin << "'";
-        for (const auto &arg : launchArgs) {
-            QString escaped = arg;
-            escaped.replace("'", "'\\''");
-            out << " '" << escaped << "'";
-        }
-        out << "\n";
-
-        script.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+    QString scriptPath = writeUmuScript(accountId, winePrefix, effectiveExePath,
+                                         gameArgs, gameid, true);
+    if (scriptPath.isEmpty()) {
+        emit instanceError(accountId, "Failed to create launch script");
+        return false;
     }
 
     // Launch the script
@@ -513,14 +425,15 @@ bool ProcessManager::setupAccount(const QString &accountId)
         return false;
     }
 
-    if (m_lutrisGameId <= 0) {
-        emit instanceError(accountId, "No Lutris game ID — cannot launch for setup");
-        return false;
-    }
-
     QString basePrefix = m_accounts->basePrefix();
     if (basePrefix.isEmpty()) {
         emit instanceError(accountId, "No base prefix configured");
+        return false;
+    }
+
+    QString gw2ExePath = m_accounts->gw2ExePath();
+    if (gw2ExePath.isEmpty()) {
+        emit instanceError(accountId, "No GW2 exe path configured");
         return false;
     }
 
@@ -554,7 +467,7 @@ bool ProcessManager::setupAccount(const QString &accountId)
     emit instanceOutput(accountId, "=== Setup Account ===\n");
     emit instanceOutput(accountId, QString("Backed up Local.dat [%1]\n").arg(fileInfo(localDatPath)));
     emit instanceOutput(accountId,
-        "Launching GW2 via Lutris. Please:\n"
+        "Launching GW2 via umu-run. Please:\n"
         "  1. Log out from the main account (Character Select > Log Out)\n"
         "  2. Enter your alt account credentials\n"
         "  3. Check 'Remember Account Name' and 'Remember Password'\n"
@@ -566,37 +479,55 @@ bool ProcessManager::setupAccount(const QString &accountId)
     m_setupAccountId = accountId;
     m_localDatPath = localDatPath;
     m_localDatBackupPath = backupPath;
-    m_basePrefix = basePrefix;
 
-    // Launch via Lutris
-    QString lutrisUri = QString("lutris:rungameid/%1").arg(m_lutrisGameId);
-    qint64 pid = 0;
-    if (!QProcess::startDetached("xdg-open", {lutrisUri}, QString(), &pid)) {
-        // Restore backup on failure
+    // Launch via umu-run in base prefix
+    QString scriptPath = writeUmuScript(accountId, basePrefix, gw2ExePath,
+                                         {}, "umu-1284210", false);
+    if (scriptPath.isEmpty()) {
         QFile::remove(localDatPath);
         QFile::rename(backupPath, localDatPath);
         m_setupAccountId.clear();
-        emit instanceError(accountId, "Failed to launch Lutris for setup");
+        emit instanceError(accountId, "Failed to create setup script");
         return false;
     }
 
-    emit instanceOutput(accountId, QString("Lutris launched (PID %1) — waiting for game to exit...\n").arg(pid));
+    auto *proc = new QProcess(this);
+    proc->setProperty("accountId", accountId);
+    proc->setProperty("scriptPath", scriptPath);
+    proc->setProperty("isSetup", true);
 
-    // Track as a detached instance so polling picks it up
+    connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this, &ProcessManager::onProcessFinished);
+    connect(proc, &QProcess::errorOccurred,
+            this, &ProcessManager::onProcessError);
+    connect(proc, &QProcess::readyReadStandardOutput, this, [this, proc]() {
+        QString accountId = proc->property("accountId").toString();
+        emit instanceOutput(accountId, proc->readAllStandardOutput());
+    });
+    connect(proc, &QProcess::readyReadStandardError, this, [this, proc]() {
+        QString accountId = proc->property("accountId").toString();
+        emit instanceOutput(accountId, proc->readAllStandardError());
+    });
+
     InstanceInfo info;
     info.accountId = accountId;
     info.state = InstanceState::Running;
-    info.pid = pid;
-    info.process = nullptr;
+    info.process = proc;
     m_instances[accountId] = info;
 
-    if (!m_pollTimer) {
-        m_pollTimer = new QTimer(this);
-        connect(m_pollTimer, &QTimer::timeout,
-                this, &ProcessManager::pollDetachedInstances);
+    proc->start("/bin/bash", {scriptPath});
+    if (!proc->waitForStarted(10000)) {
+        QFile::remove(localDatPath);
+        QFile::rename(backupPath, localDatPath);
+        m_setupAccountId.clear();
+        m_instances[accountId].state = InstanceState::Stopped;
+        QFile::remove(scriptPath);
+        emit instanceError(accountId, "Failed to start setup script");
+        return false;
     }
-    m_pollTimer->start(3000);
 
+    m_instances[accountId].pid = proc->processId();
+    emit instanceOutput(accountId, QString("umu-run launched (PID %1) — waiting for game to exit...\n").arg(proc->processId()));
     emit instanceStarted(accountId);
     return true;
 }
@@ -673,85 +604,15 @@ bool ProcessManager::updateAlt(const QString &accountId, const QString &basePref
     m_updateBackupPath = backupPath;
     m_updateSavedDir = savedDir;
 
-    // Build a launch script using the base prefix (not a clone)
-    auto runner = m_wine->selectedRunner();
-    if (runner.path.isEmpty()) {
+    // Launch via umu-run with -image flag in base prefix
+    QString scriptPath = writeUmuScript(accountId, basePrefix, exePath,
+                                         {"-image"}, "umu-1284210", false);
+    if (scriptPath.isEmpty()) {
         QFile::remove(localDatPath);
         QFile::rename(backupPath, localDatPath);
         m_updateAccountId.clear();
-        emit instanceError(accountId, "No Wine runner selected");
+        emit instanceError(accountId, "Failed to create update script");
         return false;
-    }
-
-    QProcessEnvironment procEnv;
-    if (m_envCaptured) {
-        procEnv = m_capturedEnv;
-    } else {
-        procEnv = buildEnvironment(accountId, basePrefix);
-    }
-
-    QString scriptPath = QDir::tempPath() + "/sir-launchalot-update-" + accountId + ".sh";
-    {
-        QFile script(scriptPath);
-        if (!script.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QFile::remove(localDatPath);
-            QFile::rename(backupPath, localDatPath);
-            m_updateAccountId.clear();
-            emit instanceError(accountId, "Failed to create update script");
-            return false;
-        }
-        QTextStream out(&script);
-        out << "#!/bin/bash\n";
-
-        QStringList exportKeys = {
-            "WINEPREFIX", "WINEARCH", "WINE", "WINELOADER",
-            "WINELOADERNOEXEC", "WINEDEBUG",
-            "WINEESYNC", "WINEFSYNC", "WINEDLLOVERRIDES",
-            "WINE_MONO_CACHE_DIR", "WINE_GECKO_CACHE_DIR",
-            "WINE_LARGE_ADDRESS_AWARE", "WINE_FULLSCREEN_FSR",
-            "PROTONPATH", "GAMEID", "STORE",
-            "STEAM_COMPAT_APP_ID", "STEAM_COMPAT_INSTALL_PATH",
-            "STEAM_COMPAT_DATA_PATH", "STEAM_COMPAT_CLIENT_INSTALL_PATH",
-            "STEAM_COMPAT_MOUNTS",
-            "DXVK_LOG_LEVEL", "DXVK_NVAPIHACK", "DXVK_ENABLE_NVAPI",
-            "PROTON_DXVK_D3D8", "PROTON_BATTLEYE_RUNTIME", "PROTON_EAC_RUNTIME",
-            "MANGOHUD", "MANGOHUD_DLSYM", "UMU_LOG",
-            "GST_PLUGIN_SYSTEM_PATH_1_0",
-            "WINE_GST_REGISTRY_DIR",
-            "MEDIACONV_AUDIO_DUMP_FILE", "MEDIACONV_AUDIO_TRANSCODED_FILE",
-            "MEDIACONV_VIDEO_DUMP_FILE", "MEDIACONV_VIDEO_TRANSCODED_FILE",
-            "__GL_SHADER_DISK_CACHE", "__GL_SHADER_DISK_CACHE_PATH",
-            "PULSE_LATENCY_MSEC",
-            "LD_LIBRARY_PATH",
-            "STAGING_SHARED_MEMORY",
-        };
-        for (const auto &key : exportKeys) {
-            QString val = procEnv.value(key);
-            if (val.isEmpty()) continue;
-            val.replace("'", "'\\''");
-            out << "export " << key << "='" << val << "'\n";
-        }
-
-        // Override WINEPREFIX to the base prefix
-        QString escapedBasePrefix = basePrefix;
-        escapedBasePrefix.replace("'", "'\\''");
-        out << "export WINEPREFIX='" << escapedBasePrefix << "'\n";
-
-        QString workDir = QFileInfo(exePath).absolutePath();
-        QString escapedWorkDir = workDir;
-        escapedWorkDir.replace("'", "'\\''");
-        out << "\ncd '" << escapedWorkDir << "'\n";
-
-        QString wineBin = procEnv.value("WINE");
-        if (wineBin.isEmpty()) wineBin = runner.path;
-        QString escapedWineBin = wineBin;
-        escapedWineBin.replace("'", "'\\''");
-        QString escapedExe = exePath;
-        escapedExe.replace("'", "'\\''");
-
-        out << "\nexec '" << escapedWineBin << "' '" << escapedExe << "' -image\n";
-
-        script.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
     }
 
     // Launch the update script
@@ -822,186 +683,6 @@ void ProcessManager::updateAllAlts(const QStringList &altIds, const QString &bas
     }
 }
 
-void ProcessManager::pollDetachedInstances()
-{
-    // Try to capture the Lutris environment on the first poll tick
-    if (!m_envCaptured) {
-        captureLutrisEnvironment();
-    }
-
-    // Check if any detached (Lutris-launched) instances are still running
-    // by looking for a wineserver process using the base prefix
-    bool anyDetached = false;
-
-    for (auto it = m_instances.begin(); it != m_instances.end(); ++it) {
-        auto &info = it.value();
-        if (info.state != InstanceState::Running || info.process != nullptr)
-            continue;  // skip non-detached or non-running
-
-        anyDetached = true;
-
-        // Check if wineserver is still running specifically for our prefix
-        // by examining /proc/<pid>/environ of each wineserver process
-        QProcess check;
-        check.start("pgrep", {"wineserver"});
-        check.waitForFinished(3000);
-        QString output = check.readAllStandardOutput();
-
-        bool wineserverAlive = false;
-        QString basePrefixCanonical = QFileInfo(m_basePrefix).canonicalFilePath();
-        for (const QString &line : output.split('\n', Qt::SkipEmptyParts)) {
-            int pid = line.trimmed().toInt();
-            if (pid <= 0) continue;
-
-            QFile envFile(QString("/proc/%1/environ").arg(pid));
-            if (!envFile.open(QIODevice::ReadOnly)) continue;
-            QByteArray envData = envFile.readAll();
-            envFile.close();
-
-            for (const QByteArray &entry : envData.split('\0')) {
-                if (entry.startsWith("WINEPREFIX=")) {
-                    QString prefix = QString::fromLocal8Bit(entry.mid(11));
-                    if (QFileInfo(prefix).canonicalFilePath() == basePrefixCanonical) {
-                        wineserverAlive = true;
-                    }
-                    break;
-                }
-            }
-            if (wineserverAlive) break;
-        }
-
-        if (!wineserverAlive) {
-            // Grace period: don't mark as stopped if launched recently
-            // (Lutris/Wine takes time to start the wineserver)
-            if (info.launchTimer.isValid() && info.launchTimer.elapsed() < 30000) {
-                continue;
-            }
-
-            // No wineserver running — game has exited
-            info.state = InstanceState::Stopped;
-
-            // Handle Setup Account completion
-            if (!m_setupAccountId.isEmpty() && info.accountId == m_setupAccountId) {
-                QString accountId = m_setupAccountId;
-                emit instanceOutput(accountId, "Game exited — capturing credentials...\n");
-
-                bool success = false;
-                QString savedDir = m_overlay->dataDir() + "/" + accountId + "/saved";
-                QDir().mkpath(savedDir);
-                QString savedLocalDat = savedDir + "/Local.dat";
-
-                // Check if Local.dat was actually modified
-                QString origMd5 = fileMd5(m_localDatBackupPath);
-                QString newMd5 = fileMd5(m_localDatPath);
-
-                if (origMd5 != newMd5) {
-                    // Local.dat changed — alt credentials were saved
-                    QFile::remove(savedLocalDat);
-                    if (QFile::copy(m_localDatPath, savedLocalDat)) {
-                        emit instanceOutput(accountId,
-                            QString("Captured alt Local.dat [%1]\n").arg(fileInfo(savedLocalDat)));
-                        success = true;
-                    } else {
-                        emit instanceOutput(accountId, "ERROR: Failed to save captured Local.dat\n");
-                    }
-                } else {
-                    emit instanceOutput(accountId,
-                        "WARNING: Local.dat was not modified. Did you log in as the alt "
-                        "with 'Remember' checked?\n");
-                }
-
-                // Restore main's Local.dat from backup
-                QFile::remove(m_localDatPath);
-                if (QFile::rename(m_localDatBackupPath, m_localDatPath)) {
-                    emit instanceOutput(accountId, "Restored main's Local.dat from backup.\n");
-                } else {
-                    emit instanceOutput(accountId,
-                        "ERROR: Failed to restore Local.dat backup! "
-                        "Manual restore needed from: " + m_localDatBackupPath + "\n");
-                }
-
-                emit instanceOutput(accountId, "=== END Setup Account ===\n");
-                m_setupAccountId.clear();
-                m_localDatPath.clear();
-                m_localDatBackupPath.clear();
-                emit setupComplete(accountId, success);
-            } else {
-                emit instanceOutput(info.accountId, "Game process exited.\n");
-
-                // Patch detection: check if Gw2.dat was modified during main session
-                auto acct = m_accounts->account(info.accountId);
-                if (acct.isMain && !m_gw2DatPath.isEmpty() && m_gw2DatMtimeBefore.isValid()) {
-                    QDateTime after = QFileInfo(m_gw2DatPath).lastModified();
-                    if (after.isValid() && after != m_gw2DatMtimeBefore) {
-                        emit instanceOutput(info.accountId,
-                            "Gw2.dat was modified — a game patch was applied.\n");
-                        emit patchDetected();
-                    }
-                    m_gw2DatMtimeBefore = QDateTime();
-                }
-            }
-
-            emit instanceStopped(info.accountId);
-        }
-    }
-
-    // Stop polling if no detached instances remain
-    if (!anyDetached && m_pollTimer) {
-        m_pollTimer->stop();
-    }
-}
-
-void ProcessManager::captureLutrisEnvironment()
-{
-    if (m_envCaptured || m_basePrefix.isEmpty()) return;
-
-    // Find Wine processes and check which one uses our prefix
-    QProcess pgrep;
-    pgrep.start("pgrep", {"-a", "wine"});
-    pgrep.waitForFinished(3000);
-    QString pgrepOutput = pgrep.readAllStandardOutput();
-
-    for (const QString &line : pgrepOutput.split('\n', Qt::SkipEmptyParts)) {
-        // Extract PID from "12345 /path/to/wine ..."
-        QString pidStr = line.section(' ', 0, 0).trimmed();
-        bool ok;
-        int pid = pidStr.toInt(&ok);
-        if (!ok || pid <= 0) continue;
-
-        // Read /proc/<pid>/environ
-        QString envPath = QString("/proc/%1/environ").arg(pid);
-        QFile envFile(envPath);
-        if (!envFile.open(QIODevice::ReadOnly)) continue;
-
-        QByteArray envData = envFile.readAll();
-        envFile.close();
-
-        // Parse null-separated KEY=VALUE pairs
-        QProcessEnvironment env;
-        for (const QByteArray &entry : envData.split('\0')) {
-            if (entry.isEmpty()) continue;
-            int eq = entry.indexOf('=');
-            if (eq <= 0) continue;
-            env.insert(QString::fromLocal8Bit(entry.left(eq)),
-                       QString::fromLocal8Bit(entry.mid(eq + 1)));
-        }
-
-        // Check if this process uses our prefix
-        QString prefix = env.value("WINEPREFIX");
-        if (prefix.isEmpty()) continue;
-        if (QFileInfo(prefix).canonicalFilePath() ==
-            QFileInfo(m_basePrefix).canonicalFilePath()) {
-            m_capturedEnv = env;
-            m_envCaptured = true;
-            saveCapturedEnv();
-            emit instanceOutput("main",
-                QString("Captured Lutris environment from PID %1 (%2 vars)\n")
-                    .arg(pid).arg(env.keys().size()));
-            return;
-        }
-    }
-}
-
 ProcessManager::InstanceState ProcessManager::instanceState(const QString &accountId) const
 {
     if (m_instances.contains(accountId)) {
@@ -1024,126 +705,77 @@ QStringList ProcessManager::runningAccounts() const
 QStringList ProcessManager::buildLaunchArgs(const QString &exePath,
                                               const QString &accountId) const
 {
-    QStringList args;
-    args << exePath;
-
-    // Only add -shareArchive for alt accounts (multiboxing)
-    auto acct = m_accounts->account(accountId);
-    if (!acct.isMain) {
-        args << "-shareArchive";
-
-        // Auto-login from saved Local.dat (generated via Setup Account)
-        QString savedLocalDat = m_overlay->dataDir() + "/" + accountId + "/saved/Local.dat";
-        if (QFile::exists(savedLocalDat))
-            args << "-autologin";
-    }
-
-    // Add per-account extra args
-    args.append(acct.extraArgs);
-
-    return args;
+    Q_UNUSED(exePath)
+    Q_UNUSED(accountId)
+    return {};  // unused — args now built inline before writeUmuScript
 }
 
 QProcessEnvironment ProcessManager::buildEnvironment(const QString &accountId,
                                                        const QString &mergedPrefix) const
 {
-    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    Q_UNUSED(accountId)
+    Q_UNUSED(mergedPrefix)
+    return QProcessEnvironment();  // unused — umu-run handles all env setup
+}
 
-    // Set the WINEPREFIX
-    env.insert("WINEPREFIX", mergedPrefix);
-    env.insert("WINEARCH", "win64");
+QString ProcessManager::writeUmuScript(const QString &accountId, const QString &winePrefix,
+                                        const QString &exePath, const QStringList &extraArgs,
+                                        const QString &gameid, bool useSetsid) const
+{
+    QString scriptPath = QDir::tempPath() + "/sir-launchalot-" + accountId + ".sh";
+    QFile script(scriptPath);
+    if (!script.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        return {};
+    }
 
-    auto runner = m_wine->selectedRunner();
+    QTextStream out(&script);
+    out << "#!/bin/bash\n";
 
-    if (runner.source == "lutris" || runner.source == "proton") {
-        // Derive runner base dir from binary path (e.g. .../bin/wine -> ...)
-        QFileInfo binInfo(runner.path);
-        QString runnerDir = binInfo.dir().absolutePath();  // .../bin
-        runnerDir = QFileInfo(runnerDir).dir().absolutePath();  // runner root
+    // WINEPREFIX
+    QString escapedPrefix = winePrefix;
+    escapedPrefix.replace("'", "'\\''");
+    out << "export WINEPREFIX='" << escapedPrefix << "'\n";
 
-        // Wine binary and loader — WINELOADER is critical for subprocess spawning
-        env.insert("WINE", runner.path);
-        env.insert("WINELOADER", runner.path);
+    // PROTONPATH — use configured path or default to GE-Proton (auto-download)
+    QString proton = m_protonPath.isEmpty() ? "GE-Proton" : m_protonPath;
+    QString escapedProton = proton;
+    escapedProton.replace("'", "'\\''");
+    out << "export PROTONPATH='" << escapedProton << "'\n";
 
-        // Point Wine to the runner's bundled mono/gecko instead of downloading
-        env.insert("WINE_MONO_CACHE_DIR", runnerDir + "/mono");
-        env.insert("WINE_GECKO_CACHE_DIR", runnerDir + "/gecko");
+    // GAMEID — used by umu for protonfixes and by KDE for window identification
+    out << "export GAMEID='" << gameid << "'\n";
+    out << "export STORE='none'\n";
 
-        // Enable esync/fsync — required to match prefix state set by Lutris
-        env.insert("WINEESYNC", "1");
-        env.insert("WINEFSYNC", "1");
-        env.insert("WINEDEBUG", "-all");
+    // Working directory
+    QString workDir = QFileInfo(exePath).absolutePath();
+    QString escapedWorkDir = workDir;
+    escapedWorkDir.replace("'", "'\\''");
+    out << "\ncd '" << escapedWorkDir << "'\n";
 
-        // DXVK native DLL overrides — must match Lutris exactly (no mscoree/mshtml)
-        env.insert("WINEDLLOVERRIDES",
-            "d3d10core,d3d11,d3d12,d3d12core,d3d8,d3d9,"
-            "d3dcompiler_33,d3dcompiler_34,d3dcompiler_35,d3dcompiler_36,"
-            "d3dcompiler_37,d3dcompiler_38,d3dcompiler_39,d3dcompiler_40,"
-            "d3dcompiler_41,d3dcompiler_42,d3dcompiler_43,d3dcompiler_46,"
-            "d3dcompiler_47,d3dx10,d3dx10_33,d3dx10_34,d3dx10_35,d3dx10_36,"
-            "d3dx10_37,d3dx10_38,d3dx10_39,d3dx10_40,d3dx10_41,d3dx10_42,"
-            "d3dx10_43,d3dx11_42,d3dx11_43,d3dx9_24,d3dx9_25,d3dx9_26,"
-            "d3dx9_27,d3dx9_28,d3dx9_29,d3dx9_30,d3dx9_31,d3dx9_32,"
-            "d3dx9_33,d3dx9_34,d3dx9_35,d3dx9_36,d3dx9_37,d3dx9_38,"
-            "d3dx9_39,d3dx9_40,d3dx9_41,d3dx9_42,d3dx9_43,"
-            "dxgi,nvapi,nvapi64,nvofapi64=n;"
-            "winemenubuilder=");
+    // umu-run command
+    QString umuBin = QStandardPaths::findExecutable("umu-run");
+    if (umuBin.isEmpty()) umuBin = "umu-run";
+    QString escapedUmu = umuBin;
+    escapedUmu.replace("'", "'\\''");
 
-        // DXVK settings
-        env.insert("DXVK_LOG_LEVEL", "error");
-        env.insert("DXVK_NVAPIHACK", "0");
-        env.insert("DXVK_ENABLE_NVAPI", "1");
+    QString escapedExe = exePath;
+    escapedExe.replace("'", "'\\''");
 
-        // Wine / Proton extras
-        env.insert("WINE_FULLSCREEN_FSR", "1");
-        env.insert("WINE_LARGE_ADDRESS_AWARE", "1");
-        env.insert("PROTON_DXVK_D3D8", "1");
-        env.insert("MANGOHUD", "0");
-        env.insert("MANGOHUD_DLSYM", "0");
-        env.insert("UMU_LOG", "1");
-
-        // Anti-cheat runtimes
-        QString lutrisBase = QDir::homePath() + "/.local/share/lutris/runtime";
-        env.insert("PROTON_BATTLEYE_RUNTIME", lutrisBase + "/battleye_runtime");
-        env.insert("PROTON_EAC_RUNTIME", lutrisBase + "/eac_runtime");
-
-        // GStreamer plugin path — GW2 uses GStreamer for launcher media
-        env.insert("GST_PLUGIN_SYSTEM_PATH_1_0",
-            runnerDir + "/lib64/gstreamer-1.0/:" +
-            runnerDir + "/lib/gstreamer-1.0/");
-
-        // Shader cache and audio
-        env.insert("__GL_SHADER_DISK_CACHE", "1");
-        env.insert("__GL_SHADER_DISK_CACHE_PATH", mergedPrefix);
-        env.insert("PULSE_LATENCY_MSEC", "60");
-        env.insert("TERM", "xterm");
-
-        // Library paths — must include runner libs, system libs, and Lutris runtime
-        QString ldPath = runnerDir + "/lib:" + runnerDir + "/lib64";
-        ldPath += ":/lib64:/lib:/usr/lib64:/usr/lib";
-        ldPath += ":" + lutrisBase + "/Ubuntu-18.04-i686";
-        ldPath += ":" + lutrisBase + "/steam/i386/lib/i386-linux-gnu";
-        ldPath += ":" + lutrisBase + "/steam/i386/lib";
-        ldPath += ":" + lutrisBase + "/steam/i386/usr/lib/i386-linux-gnu";
-        ldPath += ":" + lutrisBase + "/steam/i386/usr/lib";
-        ldPath += ":" + lutrisBase + "/Ubuntu-18.04-x86_64";
-        ldPath += ":" + lutrisBase + "/steam/amd64/lib/x86_64-linux-gnu";
-        ldPath += ":" + lutrisBase + "/steam/amd64/lib";
-        ldPath += ":" + lutrisBase + "/steam/amd64/usr/lib/x86_64-linux-gnu";
-        ldPath += ":" + lutrisBase + "/steam/amd64/usr/lib";
-        env.insert("LD_LIBRARY_PATH", ldPath);
+    if (useSetsid) {
+        out << "\nexec setsid --wait '" << escapedUmu << "' '" << escapedExe << "'";
     } else {
-        // System Wine — minimal overrides
-        env.insert("WINEDLLOVERRIDES", "mscoree=;mshtml=");
+        out << "\nexec '" << escapedUmu << "' '" << escapedExe << "'";
     }
 
-    // Add per-account environment variables (can override above)
-    auto acct = m_accounts->account(accountId);
-    for (auto it = acct.envVars.constBegin(); it != acct.envVars.constEnd(); ++it) {
-        env.insert(it.key(), it.value());
+    for (const auto &arg : extraArgs) {
+        QString escaped = arg;
+        escaped.replace("'", "'\\''");
+        out << " '" << escaped << "'";
     }
+    out << "\n";
 
-    return env;
+    script.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+    return scriptPath;
 }
 
 void ProcessManager::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus)
@@ -1153,6 +785,7 @@ void ProcessManager::onProcessFinished(int exitCode, QProcess::ExitStatus exitSt
 
     QString accountId = proc->property("accountId").toString();
     bool isUpdate = proc->property("isUpdate").toBool();
+    bool isSetup = proc->property("isSetup").toBool();
 
     if (m_instances.contains(accountId)) {
         m_instances[accountId].state = InstanceState::Stopped;
@@ -1163,9 +796,10 @@ void ProcessManager::onProcessFinished(int exitCode, QProcess::ExitStatus exitSt
             QString("Process crashed with exit code %1").arg(exitCode));
     }
 
-    // Capture GFXSettings from clone prefix for alt accounts
     auto acct = m_accounts->account(accountId);
-    if (!acct.isMain && !proc->property("isUpdate").toBool()) {
+
+    // Capture GFXSettings from clone prefix for alt accounts (non-update, non-setup)
+    if (!acct.isMain && !isUpdate && !isSetup) {
         QString accountDir = m_overlay->dataDir() + "/" + accountId;
         QString clonePrefix = accountDir + "/prefix";
         QString usersDir = clonePrefix + "/drive_c/users";
@@ -1188,8 +822,54 @@ void ProcessManager::onProcessFinished(int exitCode, QProcess::ExitStatus exitSt
         }
     }
 
+    // Handle Setup Account completion
+    if (isSetup && !m_setupAccountId.isEmpty() && accountId == m_setupAccountId) {
+        emit instanceOutput(accountId, "Game exited — capturing credentials...\n");
+
+        bool success = false;
+        QString savedDir = m_overlay->dataDir() + "/" + accountId + "/saved";
+        QDir().mkpath(savedDir);
+        QString savedLocalDat = savedDir + "/Local.dat";
+
+        // Check if Local.dat was actually modified
+        QString origMd5 = fileMd5(m_localDatBackupPath);
+        QString newMd5 = fileMd5(m_localDatPath);
+
+        if (origMd5 != newMd5) {
+            // Local.dat changed — alt credentials were saved
+            QFile::remove(savedLocalDat);
+            if (QFile::copy(m_localDatPath, savedLocalDat)) {
+                emit instanceOutput(accountId,
+                    QString("Captured alt Local.dat [%1]\n").arg(fileInfo(savedLocalDat)));
+                success = true;
+            } else {
+                emit instanceOutput(accountId, "ERROR: Failed to save captured Local.dat\n");
+            }
+        } else {
+            emit instanceOutput(accountId,
+                "WARNING: Local.dat was not modified. Did you log in as the alt "
+                "with 'Remember' checked?\n");
+        }
+
+        // Restore main's Local.dat from backup
+        QFile::remove(m_localDatPath);
+        if (QFile::rename(m_localDatBackupPath, m_localDatPath)) {
+            emit instanceOutput(accountId, "Restored main's Local.dat from backup.\n");
+        } else {
+            emit instanceOutput(accountId,
+                "ERROR: Failed to restore Local.dat backup! "
+                "Manual restore needed from: " + m_localDatBackupPath + "\n");
+        }
+
+        emit instanceOutput(accountId, "=== END Setup Account ===\n");
+        m_setupAccountId.clear();
+        m_localDatPath.clear();
+        m_localDatBackupPath.clear();
+        emit setupComplete(accountId, success);
+    }
+
     // Handle Update Alt completion
-    if (isUpdate && !m_updateAccountId.isEmpty() && accountId == m_updateAccountId) {
+    else if (isUpdate && !m_updateAccountId.isEmpty() && accountId == m_updateAccountId) {
         bool success = false;
 
         // Capture updated Local.dat back to alt's saved dir
@@ -1228,7 +908,6 @@ void ProcessManager::onProcessFinished(int exitCode, QProcess::ExitStatus exitSt
                 QString nextId = m_updateQueue.takeFirst();
                 if (!updateAlt(nextId, m_updateBasePrefix, m_updateExePath)) {
                     emit updateComplete(nextId, false);
-                    // Try next if this one failed
                     if (!m_updateQueue.isEmpty()) {
                         QString nextId2 = m_updateQueue.takeFirst();
                         updateAlt(nextId2, m_updateBasePrefix, m_updateExePath);
@@ -1242,6 +921,22 @@ void ProcessManager::onProcessFinished(int exitCode, QProcess::ExitStatus exitSt
         });
     }
 
+    // Normal exit (main or alt)
+    else {
+        emit instanceOutput(accountId, "Game process exited.\n");
+
+        // Patch detection: check if Gw2.dat was modified during main session
+        if (acct.isMain && !m_gw2DatPath.isEmpty() && m_gw2DatMtimeBefore.isValid()) {
+            QDateTime after = QFileInfo(m_gw2DatPath).lastModified();
+            if (after.isValid() && after != m_gw2DatMtimeBefore) {
+                emit instanceOutput(accountId,
+                    "Gw2.dat was modified — a game patch was applied.\n");
+                emit patchDetected();
+            }
+            m_gw2DatMtimeBefore = QDateTime();
+        }
+    }
+
     emit instanceStopped(accountId);
     proc->deleteLater();
 }
@@ -1249,48 +944,10 @@ void ProcessManager::onProcessFinished(int exitCode, QProcess::ExitStatus exitSt
 
 void ProcessManager::onProcessError(QProcess::ProcessError error)
 {
+    Q_UNUSED(error)
     auto *proc = qobject_cast<QProcess *>(sender());
     if (!proc) return;
 
     QString accountId = proc->property("accountId").toString();
     emit instanceError(accountId, proc->errorString());
-}
-
-QString ProcessManager::envFilePath() const
-{
-    return QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)
-           + "/captured_env.json";
-}
-
-void ProcessManager::saveCapturedEnv() const
-{
-    if (!m_envCaptured) return;
-
-    QJsonObject obj;
-    for (const auto &key : m_capturedEnv.keys()) {
-        obj[key] = m_capturedEnv.value(key);
-    }
-
-    QString path = envFilePath();
-    QDir().mkpath(QFileInfo(path).absolutePath());
-    QFile file(path);
-    if (file.open(QIODevice::WriteOnly)) {
-        file.write(QJsonDocument(obj).toJson(QJsonDocument::Compact));
-    }
-}
-
-void ProcessManager::loadCapturedEnv()
-{
-    QFile file(envFilePath());
-    if (!file.open(QIODevice::ReadOnly)) return;
-
-    QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
-    if (!doc.isObject()) return;
-
-    QJsonObject obj = doc.object();
-    m_capturedEnv = QProcessEnvironment();
-    for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
-        m_capturedEnv.insert(it.key(), it.value().toString());
-    }
-    m_envCaptured = true;
 }

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(sir-launchalot VERSION 0.1.0 LANGUAGES CXX)
+project(sir-launchalot VERSION 0.9.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -15,7 +15,7 @@ set(CORE_SOURCES
     src/core/OverlayManager.cpp
     src/core/AccountManager.cpp
     src/core/WineManager.cpp
-    src/core/LutrisIntegration.cpp
+    src/core/InstallDetector.cpp
     src/core/ProcessManager.cpp
 )
 
@@ -23,7 +23,7 @@ set(CORE_HEADERS
     src/core/OverlayManager.h
     src/core/AccountManager.h
     src/core/WineManager.h
-    src/core/LutrisIntegration.h
+    src/core/InstallDetector.h
     src/core/ProcessManager.h
 )
 
@@ -59,6 +59,18 @@ target_link_libraries(sir-launchalot PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
+)
+
+target_compile_definitions(sir-launchalot PRIVATE
+    APP_VERSION="${PROJECT_VERSION}"
+)
+
+# Always package an AppImage after building
+add_custom_target(appimage ALL
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/build-appimage.sh --skip-build
+    DEPENDS sir-launchalot
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Packaging AppImage..."
 )
 
 # Install rules (used by linuxdeploy for AppImage)

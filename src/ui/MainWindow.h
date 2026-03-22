@@ -12,7 +12,7 @@
 class OverlayManager;
 class AccountManager;
 class WineManager;
-class LutrisIntegration;
+class InstallDetector;
 class ProcessManager;
 
 class MainWindow : public QMainWindow
@@ -59,7 +59,7 @@ private:
     OverlayManager *m_overlayManager;
     AccountManager *m_accountManager;
     WineManager *m_wineManager;
-    LutrisIntegration *m_lutris;
+    InstallDetector *m_detector;
     ProcessManager *m_processManager;
 
     // UI elements

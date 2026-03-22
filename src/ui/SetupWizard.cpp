@@ -1,5 +1,5 @@
 #include "ui/SetupWizard.h"
-#include "core/LutrisIntegration.h"
+#include "core/InstallDetector.h"
 #include "core/WineManager.h"
 
 #include <QDir>
@@ -11,11 +11,11 @@
 // SetupWizard
 // ============================================================================
 
-SetupWizard::SetupWizard(LutrisIntegration *lutris,
+SetupWizard::SetupWizard(InstallDetector *detector,
                          WineManager *wine,
                          QWidget *parent)
     : QWizard(parent)
-    , m_lutris(lutris)
+    , m_detector(detector)
     , m_wine(wine)
 {
     setWindowTitle("Sir Launchalot - First Time Setup");
@@ -23,7 +23,7 @@ SetupWizard::SetupWizard(LutrisIntegration *lutris,
     setMinimumSize(550, 400);
 
     setPage(Page_Welcome, new WelcomePage);
-    setPage(Page_Detect, new DetectPage(lutris));
+    setPage(Page_Detect, new DetectPage(detector));
     setPage(Page_Manual, new ManualConfigPage);
     setPage(Page_Name, new AccountNamePage);
 
@@ -52,11 +52,18 @@ QString SetupWizard::wineBinary() const
     return m_detectedWineBinary;
 }
 
-void SetupWizard::setDetectedInstall(const QString &prefix, const QString &exe, const QString &wine)
+QString SetupWizard::protonPath() const
+{
+    return m_detectedProtonPath;
+}
+
+void SetupWizard::setDetectedInstall(const QString &prefix, const QString &exe,
+                                      const QString &wine, const QString &proton)
 {
     m_detectedPrefix = prefix;
     m_detectedExe = exe;
     m_detectedWineBinary = wine;
+    m_detectedProtonPath = proton;
 }
 
 // ============================================================================
@@ -92,9 +99,9 @@ WelcomePage::WelcomePage(QWidget *parent)
 // DetectPage
 // ============================================================================
 
-DetectPage::DetectPage(LutrisIntegration *lutris, QWidget *parent)
+DetectPage::DetectPage(InstallDetector *detector, QWidget *parent)
     : QWizardPage(parent)
-    , m_lutris(lutris)
+    , m_detector(detector)
 {
     setTitle("Detecting GW2 Installation");
     setSubTitle("Searching for existing Guild Wars 2 installations...");
@@ -125,7 +132,7 @@ DetectPage::DetectPage(LutrisIntegration *lutris, QWidget *parent)
 
 void DetectPage::initializePage()
 {
-    m_installs = m_lutris->discoverGW2Installs();
+    m_installs = m_detector->discoverGW2Installs();
     m_installList->clear();
     m_selectedIndex = -1;
 
@@ -162,11 +169,11 @@ void DetectPage::onSelectionChanged()
         // A detected install
         m_selectedIndex = row;
         auto &gw2 = m_installs[row];
-        if (wiz) wiz->setDetectedInstall(gw2.winePrefix, gw2.exePath, gw2.wineBinary);
+        if (wiz) wiz->setDetectedInstall(gw2.winePrefix, gw2.exePath, gw2.wineBinary, gw2.protonPath);
     } else {
         // "Browse manually..." selected (or nothing)
         m_selectedIndex = -1;
-        if (wiz) wiz->setDetectedInstall({}, {}, {});
+        if (wiz) wiz->setDetectedInstall({}, {}, {}, {});
     }
     emit completeChanged();
 }
@@ -256,7 +263,7 @@ void ManualConfigPage::onBrowsePrefix()
         m_prefixEdit->setText(dir);
 
         // Auto-fill exe if found in prefix
-        QString exe = LutrisIntegration::gw2ExeInPrefix(dir);
+        QString exe = InstallDetector::gw2ExeInPrefix(dir);
         if (!exe.isEmpty() && m_exeEdit->text().trimmed().isEmpty()) {
             m_exeEdit->setText(exe);
         }

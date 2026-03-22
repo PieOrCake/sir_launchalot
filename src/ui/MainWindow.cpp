@@ -6,7 +6,7 @@
 #include "core/OverlayManager.h"
 #include "core/AccountManager.h"
 #include "core/WineManager.h"
-#include "core/LutrisIntegration.h"
+#include "core/InstallDetector.h"
 #include "core/ProcessManager.h"
 
 #include <QApplication>
@@ -38,7 +38,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_overlayManager = new OverlayManager(this);
     m_accountManager = new AccountManager(this);
     m_wineManager = new WineManager(this);
-    m_lutris = new LutrisIntegration(this);
+    m_detector = new InstallDetector(this);
     m_processManager = new ProcessManager(m_overlayManager, m_accountManager,
                                           m_wineManager, this);
 
@@ -90,52 +90,44 @@ MainWindow::MainWindow(QWidget *parent)
         } else {
             appendLog(QString("Loaded config — Prefix: %1").arg(m_basePrefix));
             appendLog(QString("  Exe: %1").arg(m_gw2ExePath));
-            // Restore persisted wine runner, or discover
-            auto runners = m_wineManager->discoverRunners();
-            QString savedRunner = m_accountManager->wineRunnerPath();
-            bool matched = false;
-            if (!savedRunner.isEmpty()) {
-                for (const auto &r : runners) {
-                    if (r.path == savedRunner) {
-                        m_wineManager->setSelectedRunner(r);
-                        appendLog(QString("  Wine runner: %1 (%2)").arg(r.name, r.version));
-                        matched = true;
-                        break;
-                    }
-                }
+
+            // Check umu-run is available
+            if (!InstallDetector::isUmuInstalled()) {
+                appendLog("ERROR: umu-run is not installed — launching will fail!");
+                appendLog("  Install umu-launcher from your package manager or");
+                appendLog("  https://github.com/Open-Wine-Components/umu-launcher");
             }
-            if (!matched && !runners.isEmpty()) {
-                // Prefer a runner matching the install source
-                QString preferredSource;
-                if (m_basePrefix.contains("/Games/", Qt::CaseInsensitive) ||
-                    m_basePrefix.contains("/lutris", Qt::CaseInsensitive)) {
-                    preferredSource = "lutris";
-                } else if (m_basePrefix.contains("/compatdata/", Qt::CaseInsensitive)) {
-                    preferredSource = "proton";
+
+            // Restore or migrate protonPath for umu-run launches
+            QString savedProton = m_accountManager->protonPath();
+
+            // Migration: if protonPath was never set, try to derive from
+            // the old wineRunnerPath or re-scan the install
+            if (savedProton.isEmpty()) {
+                QString oldRunner = m_accountManager->wineRunnerPath();
+                if (!oldRunner.isEmpty()) {
+                    savedProton = InstallDetector::deriveProtonPath(oldRunner);
                 }
-                if (!preferredSource.isEmpty()) {
-                    for (const auto &r : runners) {
-                        if (r.source == preferredSource) {
-                            m_wineManager->setSelectedRunner(r);
-                            matched = true;
+                // If derivation failed (e.g. Wine-GE runner), scan for the install
+                if (savedProton.isEmpty()) {
+                    auto installs = m_detector->discoverGW2Installs();
+                    for (const auto &inst : installs) {
+                        if (QFileInfo(inst.winePrefix).canonicalFilePath() ==
+                            QFileInfo(m_basePrefix).canonicalFilePath()) {
+                            savedProton = inst.protonPath;
                             break;
                         }
                     }
                 }
-                if (!matched) {
-                    m_wineManager->setSelectedRunner(runners.first());
+                if (!savedProton.isEmpty()) {
+                    m_accountManager->setProtonPath(savedProton);
+                    appendLog(QString("  Migrated protonPath: %1").arg(savedProton));
                 }
-                auto sel = m_wineManager->selectedRunner();
-                m_accountManager->setWineRunnerPath(sel.path);
-                appendLog(QString("  Wine runner: %1 (%2)")
-                          .arg(sel.name, sel.version));
             }
-            // Detect Lutris game ID for CLI-based launching
-            int lutrisId = m_lutris->detectLutrisGameId(m_basePrefix);
-            if (lutrisId > 0) {
-                m_processManager->setLutrisGameId(lutrisId);
-                appendLog(QString("  Lutris game ID: %1 (will launch via Lutris CLI)").arg(lutrisId));
-            }
+
+            m_processManager->setProtonPath(savedProton);
+            appendLog(QString("  Proton: %1").arg(
+                savedProton.isEmpty() ? "GE-Proton (auto)" : savedProton));
 
             refreshAccountList();
         }
@@ -273,7 +265,7 @@ void MainWindow::setupMenuBar()
         QMessageBox about(this);
         about.setWindowTitle("About Sir Launchalot");
         about.setIconPixmap(windowIcon().pixmap(64, 64));
-        about.setText("<h2>Sir Launchalot v0.1.0</h2>");
+        about.setText(QString("<h2>Sir Launchalot v%1</h2>").arg(APP_VERSION));
         about.setInformativeText(
             "Guild Wars 2 multibox launcher for Linux.\n\n"
             "Features:\n"
@@ -282,7 +274,7 @@ void MainWindow::setupMenuBar()
             "  • Per-account credentials and graphics settings\n"
             "  • Batch alt updates after game patches\n"
             "  • External app launcher integration\n"
-            "  • Lutris and umu-run/Proton compatibility\n\n"
+            "  • Lutris, Heroic & Faugus install detection\n\n"
             "Requires: rsync, Wine or Proton");
         about.setMinimumWidth(500);
         about.exec();
@@ -438,7 +430,7 @@ void MainWindow::detectGW2Installation()
 {
     appendLog("Searching for GW2 installations...");
 
-    auto installs = m_lutris->discoverGW2Installs();
+    auto installs = m_detector->discoverGW2Installs();
     if (installs.isEmpty()) {
         appendLog("No GW2 installation found. Please configure in Settings.");
         return;
@@ -450,39 +442,15 @@ void MainWindow::detectGW2Installation()
     m_accountManager->setBasePrefix(m_basePrefix);
     m_accountManager->setGw2ExePath(m_gw2ExePath);
 
+    // Persist protonPath from detected install
+    m_accountManager->setProtonPath(gw2.protonPath);
+    m_processManager->setProtonPath(gw2.protonPath);
+
     appendLog(QString("Found GW2: %1").arg(gw2.name));
     appendLog(QString("  Prefix: %1").arg(m_basePrefix));
     appendLog(QString("  Exe: %1").arg(m_gw2ExePath));
-
-    // Try to auto-select a wine runner
-    auto runners = m_wineManager->discoverRunners();
-    if (!runners.isEmpty()) {
-        // Prefer the runner matching the Lutris config, otherwise first available
-        if (!gw2.wineBinary.isEmpty()) {
-            for (const auto &r : runners) {
-                if (r.path == gw2.wineBinary) {
-                    m_wineManager->setSelectedRunner(r);
-                    appendLog(QString("  Wine runner: %1 (%2)")
-                              .arg(r.name, r.version));
-                    break;
-                }
-            }
-        }
-        if (m_wineManager->selectedRunner().path.isEmpty()) {
-            m_wineManager->setSelectedRunner(runners.first());
-            appendLog(QString("  Wine runner: %1 (%2)")
-                      .arg(runners.first().name, runners.first().version));
-        }
-    } else {
-        appendLog("WARNING: No Wine runners found.");
-    }
-
-    // Detect Lutris game ID for CLI-based launching
-    int lutrisId = m_lutris->detectLutrisGameId(m_basePrefix);
-    if (lutrisId > 0) {
-        m_processManager->setLutrisGameId(lutrisId);
-        appendLog(QString("  Lutris game ID: %1 (will launch via Lutris CLI)").arg(lutrisId));
-    }
+    appendLog(QString("  Proton: %1").arg(
+        gw2.protonPath.isEmpty() ? "GE-Proton (auto)" : gw2.protonPath));
 
     updateButtonStates();
 }
@@ -496,13 +464,27 @@ void MainWindow::runSetupWizard()
         return;
     }
 
-    SetupWizard wizard(m_lutris, m_wineManager, this);
+    if (!InstallDetector::isUmuInstalled()) {
+        QMessageBox::critical(this, "umu-launcher Required",
+            "umu-launcher (umu-run) is not installed.\n\n"
+            "Sir Launchalot requires umu-launcher to run Guild Wars 2.\n"
+            "Please install it from your distribution's package manager\n"
+            "or from https://github.com/Open-Wine-Components/umu-launcher");
+        return;
+    }
+
+    SetupWizard wizard(m_detector, m_wineManager, this);
     if (wizard.exec() == QDialog::Accepted) {
         // Set and persist the base prefix and exe path
         m_basePrefix = wizard.winePrefix();
         m_gw2ExePath = wizard.gw2ExePath();
         m_accountManager->setBasePrefix(m_basePrefix);
         m_accountManager->setGw2ExePath(m_gw2ExePath);
+
+        // Persist protonPath from detected install (empty = auto GE-Proton)
+        QString detectedProton = wizard.protonPath();
+        m_accountManager->setProtonPath(detectedProton);
+        m_processManager->setProtonPath(detectedProton);
 
         // Create the main account (or update if re-running wizard)
         AccountManager::Account mainAcct;
@@ -514,55 +496,7 @@ void MainWindow::runSetupWizard()
         appendLog(QString("Main account created: %1").arg(mainAcct.displayName));
         appendLog(QString("  Prefix: %1").arg(m_basePrefix));
         appendLog(QString("  Exe: %1").arg(m_gw2ExePath));
-
-        // Discover and select a Wine runner
-        auto runners = m_wineManager->discoverRunners();
-        QString detectedBinary = wizard.wineBinary();
-        bool matched = false;
-
-        // First: try using the binary detected from the Lutris config
-        if (!detectedBinary.isEmpty() && QFile::exists(detectedBinary)) {
-            for (const auto &r : runners) {
-                if (r.path == detectedBinary) {
-                    m_wineManager->setSelectedRunner(r);
-                    matched = true;
-                    break;
-                }
-            }
-            // If the Lutris binary isn't in our runner list, use it directly
-            if (!matched) {
-                WineManager::WineRunner r;
-                r.name = QFileInfo(detectedBinary).dir().dirName();
-                r.path = detectedBinary;
-                r.version = WineManager::wineVersion(detectedBinary);
-                r.source = "lutris";
-                m_wineManager->setSelectedRunner(r);
-                matched = true;
-            }
-        }
-
-        // If no specific binary matched, prefer a Lutris runner
-        if (!matched && !runners.isEmpty()) {
-            for (const auto &r : runners) {
-                if (r.source == "lutris") {
-                    m_wineManager->setSelectedRunner(r);
-                    matched = true;
-                    break;
-                }
-            }
-            if (!matched) {
-                m_wineManager->setSelectedRunner(runners.first());
-            }
-        }
-
-        auto selected = m_wineManager->selectedRunner();
-        if (!selected.path.isEmpty()) {
-            m_accountManager->setWineRunnerPath(selected.path);
-            appendLog(QString("  Wine runner: %1 (%2)")
-                      .arg(selected.name, selected.version));
-        } else {
-            appendLog("WARNING: No Wine runners found.");
-        }
+        appendLog(QString("  Proton: %1").arg(detectedProton.isEmpty() ? "GE-Proton (auto)" : detectedProton));
 
         refreshAccountList();
         updateButtonStates();
@@ -582,7 +516,7 @@ void MainWindow::onAddAccount()
     if (!m_processManager->runningAccounts().isEmpty()) {
         QMessageBox::warning(this, "Accounts Running",
             "Stop all running accounts before adding a new alt.\n\n"
-            "Setup mode needs to launch GW2 via Lutris to capture credentials.");
+            "Setup mode needs to launch GW2 via umu-run to capture credentials.");
         return;
     }
 

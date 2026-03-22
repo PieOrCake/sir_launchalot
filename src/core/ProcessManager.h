@@ -5,7 +5,6 @@
 #include <QString>
 #include <QMap>
 #include <QDateTime>
-#include <QElapsedTimer>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QTimer>
@@ -37,7 +36,6 @@ public:
         InstanceState state = InstanceState::Stopped;
         qint64 pid = 0;
         QProcess *process = nullptr;
-        QElapsedTimer launchTimer;  // tracks time since launch for grace period
     };
 
     bool launchAccount(const QString &accountId, const QString &basePrefix,
@@ -56,8 +54,8 @@ public:
     void setLaunchDelay(int msec);
     int launchDelay() const;
 
-    void setLutrisGameId(int id);
-    int lutrisGameId() const;
+    void setProtonPath(const QString &path);
+    QString protonPath() const;
 
     QProcessEnvironment buildEnvironment(const QString &accountId,
                                           const QString &mergedPrefix) const;
@@ -75,26 +73,20 @@ signals:
 private slots:
     void onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus);
     void onProcessError(QProcess::ProcessError error);
-    void pollDetachedInstances();
-    void captureLutrisEnvironment();
 
 private:
     QStringList buildLaunchArgs(const QString &exePath,
                                  const QString &accountId) const;
-    void saveCapturedEnv() const;
-    void loadCapturedEnv();
-    QString envFilePath() const;
+    QString writeUmuScript(const QString &accountId, const QString &winePrefix,
+                            const QString &exePath, const QStringList &extraArgs,
+                            const QString &gameid, bool useSetsid = true) const;
 
     OverlayManager *m_overlay;
     AccountManager *m_accounts;
     WineManager *m_wine;
     QMap<QString, InstanceInfo> m_instances;
     int m_launchDelay = 5000; // ms between sequential launches
-    int m_lutrisGameId = -1;
-    QString m_basePrefix;  // for polling wineserver
-    QTimer *m_pollTimer = nullptr;
-    QProcessEnvironment m_capturedEnv;  // env captured from Lutris Wine process
-    bool m_envCaptured = false;
+    QString m_protonPath;     // PROTONPATH for umu-run (empty = "GE-Proton")
 
     // Setup Account mode: captures alt's Local.dat from base prefix
     QString m_setupAccountId;       // non-empty = setup mode active
