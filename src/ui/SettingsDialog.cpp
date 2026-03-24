@@ -1,5 +1,4 @@
 #include "ui/SettingsDialog.h"
-#include "core/WineManager.h"
 
 #include <QDialogButtonBox>
 #include <QFileDialog>
@@ -10,9 +9,8 @@
 #include <QPushButton>
 #include <QVBoxLayout>
 
-SettingsDialog::SettingsDialog(WineManager *wineManager, QWidget *parent)
+SettingsDialog::SettingsDialog(QWidget *parent)
     : QDialog(parent)
-    , m_wineManager(wineManager)
 {
     setupUi();
     setWindowTitle("Settings");
@@ -47,33 +45,26 @@ void SettingsDialog::setupUi()
 
     layout->addWidget(gw2Group);
 
-    // Wine Runner group (read-only)
-    auto *wineGroup = new QGroupBox("Wine Runner (detected)");
-    auto *wineForm = new QFormLayout(wineGroup);
+    // API group
+    auto *apiGroup = new QGroupBox("GW2 API");
+    auto *apiForm = new QFormLayout(apiGroup);
 
-    auto selected = m_wineManager->selectedRunner();
-    m_runnerLabel = new QLabel;
-    if (!selected.path.isEmpty()) {
-        m_runnerLabel->setText(QString("%1 (%2)").arg(selected.name, selected.version));
-        m_runnerLabel->setToolTip(selected.path);
-    } else {
-        m_runnerLabel->setText("Not detected — run Setup Wizard");
-    }
-    wineForm->addRow("Runner:", m_runnerLabel);
+    auto *sliderLayout = new QHBoxLayout;
+    m_apiRefreshSlider = new QSlider(Qt::Horizontal);
+    m_apiRefreshSlider->setRange(5, 60);
+    m_apiRefreshSlider->setValue(15);
+    m_apiRefreshSlider->setTickInterval(5);
+    m_apiRefreshSlider->setTickPosition(QSlider::TicksBelow);
+    m_apiRefreshLabel = new QLabel("15 min");
+    m_apiRefreshLabel->setFixedWidth(50);
+    connect(m_apiRefreshSlider, &QSlider::valueChanged, this, [this](int val) {
+        m_apiRefreshLabel->setText(QString("%1 min").arg(val));
+    });
+    sliderLayout->addWidget(m_apiRefreshSlider);
+    sliderLayout->addWidget(m_apiRefreshLabel);
+    apiForm->addRow("Auto-refresh interval:", sliderLayout);
 
-    layout->addWidget(wineGroup);
-
-    // Launch group
-    auto *launchGroup = new QGroupBox("Launch Options");
-    auto *launchForm = new QFormLayout(launchGroup);
-
-    m_delaySpin = new QSpinBox;
-    m_delaySpin->setRange(0, 60);
-    m_delaySpin->setValue(5);
-    m_delaySpin->setSuffix(" seconds");
-    launchForm->addRow("Delay between launches:", m_delaySpin);
-
-    layout->addWidget(launchGroup);
+    layout->addWidget(apiGroup);
 
     // Buttons
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
@@ -101,6 +92,16 @@ void SettingsDialog::setGw2ExePath(const QString &path)
 QString SettingsDialog::gw2ExePath() const
 {
     return m_exeEdit->text().trimmed();
+}
+
+void SettingsDialog::setApiRefreshInterval(int minutes)
+{
+    m_apiRefreshSlider->setValue(qBound(5, minutes, 60));
+}
+
+int SettingsDialog::apiRefreshInterval() const
+{
+    return m_apiRefreshSlider->value();
 }
 
 void SettingsDialog::onBrowsePrefix()

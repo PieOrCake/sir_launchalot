@@ -51,9 +51,6 @@ public:
     InstanceState instanceState(const QString &accountId) const;
     QStringList runningAccounts() const;
 
-    void setLaunchDelay(int msec);
-    int launchDelay() const;
-
     void setProtonPath(const QString &path);
     QString protonPath() const;
 
@@ -91,7 +88,6 @@ private:
     AccountManager *m_accounts;
     WineManager *m_wine;
     QMap<QString, InstanceInfo> m_instances;
-    int m_launchDelay = 5000; // ms between sequential launches
     QString m_protonPath;     // PROTONPATH for umu-run (empty = "GE-Proton")
 
     // Setup Account mode: captures alt's Local.dat from base prefix

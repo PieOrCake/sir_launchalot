@@ -48,16 +48,6 @@ ProcessManager::~ProcessManager()
     stopAll();
 }
 
-void ProcessManager::setLaunchDelay(int msec)
-{
-    m_launchDelay = msec;
-}
-
-int ProcessManager::launchDelay() const
-{
-    return m_launchDelay;
-}
-
 void ProcessManager::setProtonPath(const QString &path)
 {
     m_protonPath = path;

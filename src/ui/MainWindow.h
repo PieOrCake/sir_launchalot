@@ -68,11 +68,11 @@ private:
 
     // UI elements
     QListWidget *m_accountList;
-    QPushButton *m_addBtn;
-    QPushButton *m_addAppBtn;
-    QPushButton *m_logToggleBtn;
+    QAction *m_addAltAction;
     QWidget *m_logWindow;
     QTextEdit *m_logView;
+    QLabel *m_statusLabel;
+    QTimer *m_apiRefreshTimer;
 
     // State
     QString m_basePrefix;

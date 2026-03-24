@@ -46,13 +46,22 @@ MainWindow::MainWindow(bool devMode, QWidget *parent)
     m_apiClient = new Gw2ApiClient(this);
     connect(m_apiClient, &Gw2ApiClient::dataReady, this, [this](const QString &) {
         refreshAccountList();
+        // Clear status if no more pending requests
+        if (m_apiClient->pendingCount() == 0)
+            m_statusLabel->setText("API data updated");
     });
     connect(m_apiClient, &Gw2ApiClient::fetchError, this, [this](const QString &accountId, const QString &error) {
         appendLog(QString("API error (%1): %2").arg(accountId, error));
+        if (m_apiClient->pendingCount() == 0)
+            m_statusLabel->setText("API refresh failed");
     });
+
+    m_apiRefreshTimer = new QTimer(this);
+    connect(m_apiRefreshTimer, &QTimer::timeout, this, &MainWindow::fetchApiData);
 
     setupUi();
     setupMenuBar();
+    updateButtonStates();
 
     // Connect process manager signals
     connect(m_processManager, &ProcessManager::instanceStarted,
@@ -85,6 +94,7 @@ MainWindow::MainWindow(bool devMode, QWidget *parent)
     refreshAccountList();
     refreshExternalAppList();
     fetchApiData();
+    m_apiRefreshTimer->start(m_accountManager->apiRefreshInterval() * 60 * 1000);
 
     // First run: show setup wizard; otherwise load saved settings
     if (m_accountManager->accounts().isEmpty()) {
@@ -150,8 +160,7 @@ MainWindow::MainWindow(bool devMode, QWidget *parent)
 bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 {
     if (obj == m_logWindow && event->type() == QEvent::Close) {
-        m_logToggleBtn->setChecked(false);
-        m_logToggleBtn->setText("Show Log");
+        // Log window closed by user
     }
     if (obj == m_accountList->viewport() && event->type() == QEvent::Drop) {
         // Let Qt process the drop first, then read the new order
@@ -203,27 +212,11 @@ void MainWindow::setupUi()
     m_accountList->viewport()->installEventFilter(this);
     leftLayout->addWidget(m_accountList, 1);
 
-    // Toolbar
-    auto *toolbar = new QHBoxLayout;
-    toolbar->setSpacing(6);
-
-    m_addBtn = new QPushButton("+ Add Alt");
-    toolbar->addWidget(m_addBtn);
-
-    m_addAppBtn = new QPushButton("+ Add App");
-    toolbar->addWidget(m_addAppBtn);
-    toolbar->addStretch();
-
-    m_logToggleBtn = new QPushButton("Show Log");
-    m_logToggleBtn->setCheckable(true);
-    m_logToggleBtn->setChecked(false);
-    toolbar->addWidget(m_logToggleBtn);
-
-    connect(m_addBtn, &QPushButton::clicked, this, &MainWindow::onAddAccount);
-    connect(m_addAppBtn, &QPushButton::clicked, this, &MainWindow::onAddExternalApp);
-    connect(m_logToggleBtn, &QPushButton::clicked, this, &MainWindow::onToggleLog);
-
-    leftLayout->addLayout(toolbar);
+    // Status bar
+    m_statusLabel = new QLabel;
+    m_statusLabel->setFont(QFont(m_statusLabel->font().family(), m_statusLabel->font().pointSize() - 1));
+    m_statusLabel->setStyleSheet("color: #9e9e9e;");
+    leftLayout->addWidget(m_statusLabel);
 
     outerLayout->addWidget(leftWidget);
 
@@ -259,7 +252,6 @@ void MainWindow::setupUi()
     });
 
     resize(320, 280);
-    updateButtonStates();
 }
 
 void MainWindow::setupMenuBar()
@@ -267,8 +259,12 @@ void MainWindow::setupMenuBar()
     auto *fileMenu = menuBar()->addMenu("&File");
     fileMenu->addAction("Setup &Wizard...", this, &MainWindow::runSetupWizard);
     fileMenu->addAction("&Settings...", this, &MainWindow::onSettings);
+    fileMenu->addSeparator();
+    m_addAltAction = fileMenu->addAction("Add &Alt...", this, &MainWindow::onAddAccount);
+    fileMenu->addAction("Add &External App...", this, &MainWindow::onAddExternalApp);
     fileMenu->addAction("&Update Alts (after game patch)...", this, &MainWindow::onUpdateAlts);
     fileMenu->addSeparator();
+    fileMenu->addAction("Show &Log", this, &MainWindow::onToggleLog);
     fileMenu->addAction(m_devMode ? "Exit &Dev Mode" : "&Dev Mode...", this, [this]() {
         if (!m_devMode) {
             auto reply = QMessageBox::question(this, "Enter Dev Mode",
@@ -299,10 +295,14 @@ void MainWindow::setupMenuBar()
             "  • Launch multiple GW2 accounts simultaneously\n"
             "  • Automatic Wine prefix cloning via rsync\n"
             "  • Per-account credentials and graphics settings\n"
+            "  • GW2 API integration (Wizard's Vault progress)\n"
             "  • Batch alt updates after game patches\n"
             "  • External app launcher integration\n"
             "  • Lutris, Heroic, Faugus & Steam install detection\n\n"
-            "Requires: rsync, Wine or Proton");
+            "Requires: umu-launcher, rsync");
+        about.setDetailedText(
+            "Project: https://github.com/PieOrCake/sir_launchalot\n"
+            "Licence: GNU General Public License v3.0 (GPLv3)");
         about.setMinimumWidth(500);
         about.exec();
     });
@@ -492,7 +492,7 @@ void MainWindow::updateButtonStates()
     for (const auto &acct : m_accountManager->accounts()) {
         if (acct.isMain) { hasMain = true; break; }
     }
-    m_addBtn->setEnabled(!m_basePrefix.isEmpty() && hasMain);
+    m_addAltAction->setEnabled(!m_basePrefix.isEmpty() && hasMain);
 }
 
 void MainWindow::appendLog(const QString &message)
@@ -740,15 +740,21 @@ void MainWindow::onSetupComplete(const QString &accountId, bool success)
 
 void MainWindow::onSettings()
 {
-    SettingsDialog dlg(m_wineManager, this);
+    SettingsDialog dlg(this);
     dlg.setBasePrefix(m_basePrefix);
     dlg.setGw2ExePath(m_gw2ExePath);
+    dlg.setApiRefreshInterval(m_accountManager->apiRefreshInterval());
 
     if (dlg.exec() == QDialog::Accepted) {
         m_basePrefix = dlg.basePrefix();
         m_gw2ExePath = dlg.gw2ExePath();
         m_accountManager->setBasePrefix(m_basePrefix);
         m_accountManager->setGw2ExePath(m_gw2ExePath);
+
+        int interval = dlg.apiRefreshInterval();
+        m_accountManager->setApiRefreshInterval(interval);
+        m_apiRefreshTimer->start(interval * 60 * 1000);
+
         appendLog("Settings updated.");
         refreshAccountList();
     }
@@ -756,17 +762,13 @@ void MainWindow::onSettings()
 
 void MainWindow::onToggleLog()
 {
-    bool show = m_logToggleBtn->isChecked();
-
-    if (show) {
+    if (m_logWindow->isVisible()) {
+        m_logWindow->hide();
+    } else {
         m_logWindow->show();
         m_logWindow->raise();
         m_logWindow->activateWindow();
-    } else {
-        m_logWindow->hide();
     }
-
-    m_logToggleBtn->setText(show ? "Hide Log" : "Show Log");
 }
 
 void MainWindow::onAccountContextMenu(const QPoint &pos)
@@ -1035,10 +1037,14 @@ void MainWindow::onInstanceOutput(const QString &accountId, const QString &outpu
 
 void MainWindow::fetchApiData()
 {
+    bool fetching = false;
     for (const auto &acct : m_accountManager->accounts()) {
         if (!acct.apiKey.isEmpty() &&
             (acct.showAccountName || acct.showDailyVault || acct.showWeeklyVault)) {
             m_apiClient->fetchAccountData(acct.id, acct.apiKey);
+            fetching = true;
         }
     }
+    if (fetching)
+        m_statusLabel->setText("Refreshing API data...");
 }

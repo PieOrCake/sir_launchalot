@@ -68,6 +68,8 @@ public:
     QString wineRunnerPath() const;
     void setProtonPath(const QString &path);
     QString protonPath() const;
+    void setApiRefreshInterval(int minutes);
+    int apiRefreshInterval() const;
 
 signals:
     void accountAdded(const QString &id);
@@ -91,6 +93,7 @@ private:
     QString m_gw2ExePath;
     QString m_wineRunnerPath;
     QString m_protonPath;
+    int m_apiRefreshInterval = 15;
 };
 
 #endif // ACCOUNTMANAGER_H

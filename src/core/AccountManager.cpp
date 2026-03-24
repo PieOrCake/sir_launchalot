@@ -66,6 +66,17 @@ QString AccountManager::protonPath() const
     return m_protonPath;
 }
 
+void AccountManager::setApiRefreshInterval(int minutes)
+{
+    m_apiRefreshInterval = qBound(5, minutes, 60);
+    save();
+}
+
+int AccountManager::apiRefreshInterval() const
+{
+    return m_apiRefreshInterval;
+}
+
 QString AccountManager::configFilePath() const
 {
     return m_configDir + "/accounts.json";
@@ -124,6 +135,7 @@ bool AccountManager::load()
     m_gw2ExePath = root.value("gw2ExePath").toString();
     m_wineRunnerPath = root.value("wineRunnerPath").toString();
     m_protonPath = root.value("protonPath").toString();
+    m_apiRefreshInterval = root.value("apiRefreshInterval").toInt(15);
 
     return true;
 }
@@ -158,6 +170,7 @@ bool AccountManager::save() const
     root["gw2ExePath"] = m_gw2ExePath;
     root["wineRunnerPath"] = m_wineRunnerPath;
     root["protonPath"] = m_protonPath;
+    root["apiRefreshInterval"] = m_apiRefreshInterval;
 
     QFile file(configFilePath());
     if (!file.open(QIODevice::WriteOnly)) {

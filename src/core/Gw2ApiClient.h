@@ -40,6 +40,7 @@ public:
 
     void fetchAccountData(const QString &accountId, const QString &apiKey);
     AccountData cachedData(const QString &accountId) const;
+    int pendingCount() const { return m_pendingCount.size(); }
 
 signals:
     void dataReady(const QString &accountId);

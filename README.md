@@ -11,7 +11,6 @@ If an LLM creating software upsets you, then perhaps this repo isn't for you. Mo
 ## Screenshots
 
 ![Main Window](screenshots/main_window.png)
-![With GW2 API Data](screenshots/with_api.png)
 ![Edit Account](screenshots/edit.png)
 
 ## Features
@@ -23,6 +22,7 @@ If an LLM creating software upsets you, then perhaps this repo isn't for you. Mo
 - **Graphics settings persistence** — each alt remembers its own graphics settings between sessions
 - **Patch detection** — detects when GW2 updates and prompts to update alts
 - **External app launcher** — launch companion apps (Discord, TeamSpeak, etc.) from the same UI
+- **GW2 API integration** — display account name and Wizard's Vault daily/weekly progress per account, with auto-refresh
 - **Instance monitoring** — track running accounts with start/stop controls
 - Runs on any Linux distro via AppImage
 
