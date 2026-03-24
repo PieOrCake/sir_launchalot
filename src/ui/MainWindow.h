@@ -14,6 +14,7 @@ class AccountManager;
 class WineManager;
 class InstallDetector;
 class ProcessManager;
+class Gw2ApiClient;
 
 class MainWindow : public QMainWindow
 {
@@ -55,12 +56,15 @@ private:
     void detectGW2Installation();
     void runSetupWizard();
 
+    void fetchApiData();
+
     // Core managers
     OverlayManager *m_overlayManager;
     AccountManager *m_accountManager;
     WineManager *m_wineManager;
     InstallDetector *m_detector;
     ProcessManager *m_processManager;
+    Gw2ApiClient *m_apiClient;
 
     // UI elements
     QListWidget *m_accountList;

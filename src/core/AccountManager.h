@@ -30,6 +30,10 @@ public:
         bool enableAddons = true;    // include addon DLLs when cloning prefix
         QStringList extraArgs;      // additional GW2 command-line args
         QMap<QString, QString> envVars; // additional environment variables
+        QString apiKey;             // GW2 API key for account data
+        bool showAccountName = false;   // display API account name
+        bool showDailyVault = false;    // display daily wizard's vault status
+        bool showWeeklyVault = false;   // display weekly wizard's vault status
     };
 
     bool load();

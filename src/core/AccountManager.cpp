@@ -410,6 +410,11 @@ QJsonObject AccountManager::accountToJson(const Account &account) const
     }
     obj["envVars"] = envObj;
 
+    if (!account.apiKey.isEmpty()) obj["apiKey"] = account.apiKey;
+    obj["showAccountName"] = account.showAccountName;
+    obj["showDailyVault"] = account.showDailyVault;
+    obj["showWeeklyVault"] = account.showWeeklyVault;
+
     return obj;
 }
 
@@ -434,6 +439,11 @@ AccountManager::Account AccountManager::accountFromJson(const QJsonObject &obj) 
     for (auto it = envObj.constBegin(); it != envObj.constEnd(); ++it) {
         acct.envVars[it.key()] = it.value().toString();
     }
+
+    acct.apiKey = obj.value("apiKey").toString();
+    acct.showAccountName = obj.value("showAccountName").toBool(false);
+    acct.showDailyVault = obj.value("showDailyVault").toBool(false);
+    acct.showWeeklyVault = obj.value("showWeeklyVault").toBool(false);
 
     return acct;
 }

@@ -25,6 +25,10 @@ private:
     QLineEdit *m_nameEdit;
     QCheckBox *m_mainCheck;
     QCheckBox *m_enableAddonsCheck;
+    QLineEdit *m_apiKeyEdit;
+    QCheckBox *m_showAccountNameCheck;
+    QCheckBox *m_showDailyVaultCheck;
+    QCheckBox *m_showWeeklyVaultCheck;
 };
 
 #endif // ACCOUNTDIALOG_H

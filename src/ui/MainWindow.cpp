@@ -8,6 +8,7 @@
 #include "core/WineManager.h"
 #include "core/InstallDetector.h"
 #include "core/ProcessManager.h"
+#include "core/Gw2ApiClient.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -42,6 +43,13 @@ MainWindow::MainWindow(bool devMode, QWidget *parent)
     m_detector = new InstallDetector(this);
     m_processManager = new ProcessManager(m_overlayManager, m_accountManager,
                                           m_wineManager, this);
+    m_apiClient = new Gw2ApiClient(this);
+    connect(m_apiClient, &Gw2ApiClient::dataReady, this, [this](const QString &) {
+        refreshAccountList();
+    });
+    connect(m_apiClient, &Gw2ApiClient::fetchError, this, [this](const QString &accountId, const QString &error) {
+        appendLog(QString("API error (%1): %2").arg(accountId, error));
+    });
 
     setupUi();
     setupMenuBar();
@@ -76,6 +84,7 @@ MainWindow::MainWindow(bool devMode, QWidget *parent)
     m_accountManager->load();
     refreshAccountList();
     refreshExternalAppList();
+    fetchApiData();
 
     // First run: show setup wizard; otherwise load saved settings
     if (m_accountManager->accounts().isEmpty()) {
@@ -326,12 +335,18 @@ void MainWindow::refreshAccountList()
             auto *rowLayout = new QHBoxLayout(rowWidget);
             rowLayout->setContentsMargins(6, 4, 6, 4);
 
+            auto *leftCol = new QVBoxLayout;
+            leftCol->setSpacing(0);
+
+            // Line 1: display name + status
+            auto *topLine = new QHBoxLayout;
             QString name = acct.displayName.isEmpty() ? acct.id : acct.displayName;
             auto *nameLabel = new QLabel(name);
             QFont nameFont = nameLabel->font();
             nameFont.setPointSize(nameFont.pointSize() + 1);
             nameLabel->setFont(nameFont);
-            rowLayout->addWidget(nameLabel);
+            topLine->addWidget(nameLabel);
+            topLine->addSpacing(6);
 
             auto state = m_processManager->instanceState(acct.id);
             bool isRunning = (state == ProcessManager::InstanceState::Running ||
@@ -360,8 +375,50 @@ void MainWindow::refreshAccountList()
                     statusLabel->setStyleSheet("color: #ef5350;");
                 }
             }
-            rowLayout->addWidget(statusLabel);
-            rowLayout->addStretch();
+            topLine->addWidget(statusLabel);
+            topLine->addStretch();
+            leftCol->addLayout(topLine);
+
+            // API data display
+            auto apiData = m_apiClient->cachedData(acct.id);
+            QFont apiFont(nameLabel->font().family(), nameLabel->font().pointSize() - 3);
+
+            // Line 2: account name
+            if (acct.showAccountName && apiData.account.valid) {
+                auto *acctNameLabel = new QLabel(apiData.account.name);
+                acctNameLabel->setFont(apiFont);
+                acctNameLabel->setStyleSheet("color: #b0bec5;");
+                leftCol->addWidget(acctNameLabel);
+            }
+
+            // Line 3: daily + weekly vault
+            QStringList vaultParts;
+            if (acct.showDailyVault && apiData.dailyVault.valid) {
+                bool dDone = apiData.dailyVault.metaClaimed ||
+                    apiData.dailyVault.metaCurrent >= apiData.dailyVault.metaComplete;
+                QString dText = QString("D:%1/%2")
+                    .arg(apiData.dailyVault.objectivesComplete)
+                    .arg(apiData.dailyVault.objectivesTotal);
+                vaultParts << QString("<span style='color:%1'>%2</span>")
+                    .arg(dDone ? "#66bb6a" : "#b0bec5", dText);
+            }
+            if (acct.showWeeklyVault && apiData.weeklyVault.valid) {
+                bool wDone = apiData.weeklyVault.metaClaimed ||
+                    apiData.weeklyVault.metaCurrent >= apiData.weeklyVault.metaComplete;
+                QString wText = QString("W:%1/%2")
+                    .arg(apiData.weeklyVault.objectivesComplete)
+                    .arg(apiData.weeklyVault.objectivesTotal);
+                vaultParts << QString("<span style='color:%1'>%2</span>")
+                    .arg(wDone ? "#66bb6a" : "#b0bec5", wText);
+            }
+            if (!vaultParts.isEmpty()) {
+                auto *vaultLabel = new QLabel(vaultParts.join("  \u2022  "));
+                vaultLabel->setTextFormat(Qt::RichText);
+                vaultLabel->setFont(apiFont);
+                leftCol->addWidget(vaultLabel);
+            }
+
+            rowLayout->addLayout(leftCol, 1);
 
             QString accountId = acct.id;
             bool needsSetup = !acct.isMain &&
@@ -572,8 +629,16 @@ void MainWindow::onEditAccount()
     if (dlg.exec() == QDialog::Accepted) {
         auto updated = dlg.account();
         updated.id = acct.id; // preserve the original ID
+        // Preserve fields the edit dialog doesn't manage
+        updated.email = acct.email;
+        updated.password = acct.password;
+        updated.localDatPath = acct.localDatPath;
+        updated.gfxSettingsPath = acct.gfxSettingsPath;
+        updated.extraArgs = acct.extraArgs;
+        updated.envVars = acct.envVars;
         if (m_accountManager->updateAccount(updated)) {
             appendLog(QString("Updated account: %1").arg(updated.displayName));
+            fetchApiData();
             refreshAccountList();
         }
     }
@@ -966,4 +1031,14 @@ void MainWindow::onInstanceError(const QString &accountId, const QString &error)
 void MainWindow::onInstanceOutput(const QString &accountId, const QString &output)
 {
     appendLog(QString("[%1] %2").arg(accountId, output.trimmed()));
+}
+
+void MainWindow::fetchApiData()
+{
+    for (const auto &acct : m_accountManager->accounts()) {
+        if (!acct.apiKey.isEmpty() &&
+            (acct.showAccountName || acct.showDailyVault || acct.showWeeklyVault)) {
+            m_apiClient->fetchAccountData(acct.id, acct.apiKey);
+        }
+    }
 }

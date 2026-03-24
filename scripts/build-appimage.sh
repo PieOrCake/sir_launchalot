@@ -73,7 +73,7 @@ APPDIR_PLUGINS="$APPDIR/usr/plugins"
 mkdir -p "$APPDIR_PLUGINS"
 
 # Only deploy the plugin categories we actually need
-NEEDED_PLUGIN_DIRS="platforms iconengines imageformats wayland-shell-integration wayland-decoration-client wayland-graphics-integration-client xcbglintegrations"
+NEEDED_PLUGIN_DIRS="platforms iconengines imageformats tls wayland-shell-integration wayland-decoration-client wayland-graphics-integration-client xcbglintegrations"
 
 for plugdir in $NEEDED_PLUGIN_DIRS; do
     src="$QT_PLUGIN_PATH/$plugdir"

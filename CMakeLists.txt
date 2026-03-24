@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(sir-launchalot VERSION 0.9.2 LANGUAGES CXX)
+project(sir-launchalot VERSION 0.9.3 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -9,7 +9,7 @@ set(CMAKE_AUTOUIC ON)
 
 set(CMAKE_INSTALL_PREFIX "/usr" CACHE PATH "Install prefix" FORCE)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
 
 set(CORE_SOURCES
     src/core/OverlayManager.cpp
@@ -17,6 +17,7 @@ set(CORE_SOURCES
     src/core/WineManager.cpp
     src/core/InstallDetector.cpp
     src/core/ProcessManager.cpp
+    src/core/Gw2ApiClient.cpp
 )
 
 set(CORE_HEADERS
@@ -25,6 +26,7 @@ set(CORE_HEADERS
     src/core/WineManager.h
     src/core/InstallDetector.h
     src/core/ProcessManager.h
+    src/core/Gw2ApiClient.h
 )
 
 set(UI_SOURCES
@@ -59,6 +61,7 @@ target_link_libraries(sir-launchalot PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
+    Qt6::Network
 )
 
 target_compile_definitions(sir-launchalot PRIVATE

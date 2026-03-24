@@ -8,9 +8,11 @@ This addon has been 100% created in [Windsurf](https://windsurf.com/) using Clau
 
 If an LLM creating software upsets you, then perhaps this repo isn't for you. Move on, and enjoy your day.
 
-## Screenshot
+## Screenshots
 
 ![Main Window](screenshots/main_window.png)
+![With GW2 API Data](screenshots/with_api.png)
+![Edit Account](screenshots/edit.png)
 
 ## Features
 
@@ -73,7 +75,7 @@ The AppImage will be created at `build/Sir_Launchalot-<version>-x86_64.AppImage`
 ### Build Dependencies
 
 - CMake 3.16+
-- Qt6 (Core, Gui, Widgets)
+- Qt6 (Core, Gui, Widgets, Network)
 - A C++17 compiler
 
 ## License
@@ -84,4 +86,4 @@ This software is provided as-is, without a warranty of any kind. Use at your own
 
 ## Third-Party Dependencies
 
-The AppImage bundles [Qt 6](https://www.qt.io/) (Core, Gui, Widgets), licensed under the [LGPL v3](https://doc.qt.io/qt-6/lgpl.html).
+The AppImage bundles [Qt 6](https://www.qt.io/) (Core, Gui, Widgets, Network), licensed under the [LGPL v3](https://doc.qt.io/qt-6/lgpl.html).
