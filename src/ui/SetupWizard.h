@@ -29,9 +29,11 @@ public:
     QString gw2ExePath() const;
     QString wineBinary() const;
     QString protonPath() const;
+    QString source() const;
 
     void setDetectedInstall(const QString &prefix, const QString &exe,
-                            const QString &wine, const QString &proton);
+                            const QString &wine, const QString &proton,
+                            const QString &source = {});
 
     enum PageId {
         Page_Welcome,
@@ -47,6 +49,7 @@ private:
     QString m_detectedExe;
     QString m_detectedWineBinary;
     QString m_detectedProtonPath;
+    QString m_detectedSource;
 };
 
 // ---- Welcome Page ----

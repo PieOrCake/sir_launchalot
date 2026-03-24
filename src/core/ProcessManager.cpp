@@ -12,6 +12,9 @@
 #include <QCryptographicHash>
 #include <QTextStream>
 #include <QTimer>
+#include <QImage>
+#include <QPainter>
+#include <QFont>
 
 static QString fileMd5(const QString &path) {
     QFile f(path);
@@ -86,11 +89,19 @@ bool ProcessManager::launchAccount(const QString &accountId,
 
         emit instanceOutput(accountId, "=== Main account launch (umu-run) ===\n");
 
+        // Per-account GAMEID + .desktop for separate taskbar icons
+        QString appId = uniqueAppId(accountId);
+        QString gameid = "umu-" + appId;
+        QString displayName = acct.displayName.isEmpty() ? accountId : acct.displayName;
+        QString badge = accountBadgeLabel(accountId);
+        ensureGw2Icon(exePath);
+        installDesktopEntry(accountId, displayName, appId, badge);
+
         QStringList mainArgs;
         mainArgs.append(acct.extraArgs);
 
         QString scriptPath = writeUmuScript(accountId, basePrefix, exePath,
-                                             mainArgs, "umu-1284210", false);
+                                             mainArgs, gameid, false);
         if (scriptPath.isEmpty()) {
             emit instanceError(accountId, "Failed to create launch script");
             return false;
@@ -303,30 +314,13 @@ bool ProcessManager::launchAccount(const QString &accountId,
     }
     gameArgs.append(acct.extraArgs);
 
-    // Each account gets a unique GAMEID so KDE can show separate panel icons
-    uint idHash = qHash(accountId) % 10000;
-    QString uniqueAppId = QString::number(1284210000 + idHash);
-    QString gameid = "umu-" + uniqueAppId;
-
-    // Create a .desktop file so KDE shows this as a separate panel icon
-    QString windowClass = "steam_app_" + uniqueAppId;
+    // Per-account GAMEID + .desktop for separate taskbar icons
+    QString appId = uniqueAppId(accountId);
+    QString gameid = "umu-" + appId;
     QString displayName = acct.displayName.isEmpty() ? accountId : acct.displayName;
-    {
-        QString appsDir = QDir::homePath() + "/.local/share/applications";
-        QDir().mkpath(appsDir);
-        QString desktopPath = appsDir + "/sir-launchalot-" + accountId + ".desktop";
-        QFile desktop(desktopPath);
-        if (desktop.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream ds(&desktop);
-            ds << "[Desktop Entry]\n";
-            ds << "Type=Application\n";
-            ds << "Name=Guild Wars 2 - " << displayName << "\n";
-            ds << "Exec=true\n";
-            ds << "StartupWMClass=" << windowClass << "\n";
-            ds << "NoDisplay=true\n";
-            ds << "Icon=gw2\n";
-        }
-    }
+    QString badge = accountBadgeLabel(accountId);
+    ensureGw2Icon(exePath);
+    installDesktopEntry(accountId, displayName, appId, badge);
 
     QString scriptPath = writeUmuScript(accountId, winePrefix, effectiveExePath,
                                          gameArgs, gameid, true);
@@ -776,6 +770,166 @@ QString ProcessManager::writeUmuScript(const QString &accountId, const QString &
 
     script.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
     return scriptPath;
+}
+
+QString ProcessManager::uniqueAppId(const QString &accountId)
+{
+    // Generate a stable per-account fake Steam app ID so each GW2 window
+    // gets its own taskbar entry. Base: 1284210 (GW2's real app ID) * 1000.
+    uint idHash = qHash(accountId) % 10000;
+    return QString::number(1284210000 + idHash);
+}
+
+void ProcessManager::installDesktopEntry(const QString &accountId,
+                                          const QString &displayName,
+                                          const QString &appId,
+                                          const QString &badgeLabel)
+{
+    QString windowClass = "steam_app_" + appId;
+    QString appsDir = QDir::homePath() + "/.local/share/applications";
+    QDir().mkpath(appsDir);
+    QString desktopPath = appsDir + "/sir-launchalot-" + accountId + ".desktop";
+
+    // Generate a per-account icon with badge overlay (M, 1, 2, ...)
+    QString iconPath = compositeAccountIcon(badgeLabel);
+    if (iconPath.isEmpty()) {
+        // Fallback to base gw2 icon or named icon
+        iconPath = QDir::homePath() + "/.local/share/icons/hicolor/256x256/apps/gw2.png";
+        if (!QFile::exists(iconPath))
+            iconPath = "gw2";
+    }
+
+    QFile desktop(desktopPath);
+    if (desktop.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QTextStream ds(&desktop);
+        ds << "[Desktop Entry]\n";
+        ds << "Type=Application\n";
+        ds << "Name=GW2 - " << displayName << "\n";
+        ds << "Exec=true\n";
+        ds << "StartupWMClass=" << windowClass << "\n";
+        ds << "NoDisplay=true\n";
+        ds << "Icon=" << iconPath << "\n";
+    }
+
+    // Notify the DE about the new/updated .desktop file
+    QProcess::startDetached("update-desktop-database", {appsDir});
+}
+
+void ProcessManager::ensureGw2Icon(const QString &exePath)
+{
+    // Install a GW2 icon for .desktop entries. Only needs to run once.
+    QString iconDir = QDir::homePath() + "/.local/share/icons/hicolor/256x256/apps";
+    QString iconPath = iconDir + "/gw2.png";
+    if (QFile::exists(iconPath)) return;
+
+    QDir().mkpath(iconDir);
+
+    // Try extracting icon from the GW2 exe using wrestool + icotool (icoutils)
+    QString wrestool = QStandardPaths::findExecutable("wrestool");
+    QString icotool = QStandardPaths::findExecutable("icotool");
+
+    if (!wrestool.isEmpty() && !icotool.isEmpty()) {
+        // wrestool extracts .ico from PE, icotool converts to .png
+        // Use the largest icon available (256x256 preferred)
+        QProcess extract;
+        extract.setProcessChannelMode(QProcess::SeparateChannels);
+        extract.start("bash", {"-c",
+            QString("'%1' -x -t 14 '%2' 2>/dev/null | '%3' -x -w 256 -o '%4' - 2>/dev/null || "
+                    "'%1' -x -t 14 '%2' 2>/dev/null | '%3' -x -o '%4' - 2>/dev/null")
+                .arg(wrestool, exePath, icotool, iconPath)});
+        extract.waitForFinished(5000);
+        if (QFile::exists(iconPath)) return;
+    }
+
+    // Try icoextract (Python tool, often available with umu-launcher)
+    QString icoextract = QStandardPaths::findExecutable("icoextract");
+    if (!icoextract.isEmpty()) {
+        QString tmpIco = QDir::tempPath() + "/sir-launchalot-gw2.ico";
+        QProcess extract;
+        extract.start(icoextract, {exePath, tmpIco});
+        extract.waitForFinished(5000);
+        if (QFile::exists(tmpIco)) {
+            // Convert .ico to .png via icotool or just copy (some DEs handle .ico)
+            if (!icotool.isEmpty()) {
+                QProcess convert;
+                convert.start(icotool, {"-x", "-w", "256", "-o", iconPath, tmpIco});
+                convert.waitForFinished(3000);
+            }
+            if (!QFile::exists(iconPath)) {
+                // Fall back: install .ico directly (KDE/GNOME can usually display it)
+                QFile::copy(tmpIco, iconDir + "/gw2.ico");
+            }
+            QFile::remove(tmpIco);
+            if (QFile::exists(iconPath)) return;
+        }
+    }
+
+    // Final fallback: copy our own icon as gw2.png
+    QString appIcon = QDir::homePath() + "/.local/share/icons/hicolor/256x256/apps/sir-launchalot.png";
+    if (QFile::exists(appIcon)) {
+        QFile::copy(appIcon, iconPath);
+    }
+}
+
+QString ProcessManager::accountBadgeLabel(const QString &accountId) const
+{
+    auto acct = m_accounts->account(accountId);
+    if (acct.isMain) return "M";
+
+    // Count only alt accounts in display order to determine badge number
+    int altIndex = 0;
+    for (const auto &id : m_accounts->orderedItemIds()) {
+        if (!m_accounts->hasAccount(id)) continue;  // skip external apps
+        auto a = m_accounts->account(id);
+        if (a.isMain) continue;
+        altIndex++;
+        if (id == accountId) return QString::number(altIndex);
+    }
+    return "?";
+}
+
+QString ProcessManager::compositeAccountIcon(const QString &badgeLabel) const
+{
+    QString iconDir = QDir::homePath() + "/.local/share/icons/hicolor/256x256/apps";
+    QString baseIcon = iconDir + "/gw2.png";
+    if (!QFile::exists(baseIcon)) return {};
+
+    // Cache per badge label so we only composite once per label
+    QString outPath = iconDir + "/gw2-badge-" + badgeLabel + ".png";
+
+    QImage img(baseIcon);
+    if (img.isNull()) return {};
+
+    // Ensure we have an alpha channel for compositing
+    if (img.format() != QImage::Format_ARGB32_Premultiplied)
+        img = img.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+
+    QPainter p(&img);
+    p.setRenderHint(QPainter::Antialiasing);
+
+    int size = img.width();
+    int badgeRadius = size * 3 / 10;   // badge circle radius
+    int cx = size - badgeRadius - 4;  // center X (bottom-right corner)
+    int cy = size - badgeRadius - 4;  // center Y
+
+    // Dark background circle with slight border
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(0, 0, 0, 200));
+    p.drawEllipse(QPoint(cx, cy), badgeRadius + 2, badgeRadius + 2);
+    p.setBrush(QColor(40, 40, 40, 240));
+    p.drawEllipse(QPoint(cx, cy), badgeRadius, badgeRadius);
+
+    // White text centered in the badge
+    QFont font("Sans", badgeRadius, QFont::Bold);
+    font.setPixelSize(badgeRadius * 5 / 3);
+    p.setFont(font);
+    p.setPen(Qt::white);
+    QRect badgeRect(cx - badgeRadius, cy - badgeRadius, badgeRadius * 2, badgeRadius * 2);
+    p.drawText(badgeRect, Qt::AlignCenter, badgeLabel);
+
+    p.end();
+    img.save(outPath, "PNG");
+    return outPath;
 }
 
 void ProcessManager::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus)

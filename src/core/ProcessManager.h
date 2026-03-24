@@ -80,6 +80,12 @@ private:
     QString writeUmuScript(const QString &accountId, const QString &winePrefix,
                             const QString &exePath, const QStringList &extraArgs,
                             const QString &gameid, bool useSetsid = true) const;
+    static QString uniqueAppId(const QString &accountId);
+    void installDesktopEntry(const QString &accountId, const QString &displayName,
+                              const QString &appId, const QString &badgeLabel);
+    void ensureGw2Icon(const QString &exePath);
+    QString compositeAccountIcon(const QString &badgeLabel) const;
+    QString accountBadgeLabel(const QString &accountId) const;
 
     OverlayManager *m_overlay;
     AccountManager *m_accounts;

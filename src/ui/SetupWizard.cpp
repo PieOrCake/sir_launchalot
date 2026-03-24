@@ -57,13 +57,20 @@ QString SetupWizard::protonPath() const
     return m_detectedProtonPath;
 }
 
+QString SetupWizard::source() const
+{
+    return m_detectedSource;
+}
+
 void SetupWizard::setDetectedInstall(const QString &prefix, const QString &exe,
-                                      const QString &wine, const QString &proton)
+                                      const QString &wine, const QString &proton,
+                                      const QString &source)
 {
     m_detectedPrefix = prefix;
     m_detectedExe = exe;
     m_detectedWineBinary = wine;
     m_detectedProtonPath = proton;
+    m_detectedSource = source;
 }
 
 // ============================================================================
@@ -169,11 +176,30 @@ void DetectPage::onSelectionChanged()
         // A detected install
         m_selectedIndex = row;
         auto &gw2 = m_installs[row];
-        if (wiz) wiz->setDetectedInstall(gw2.winePrefix, gw2.exePath, gw2.wineBinary, gw2.protonPath);
+        if (wiz) wiz->setDetectedInstall(gw2.winePrefix, gw2.exePath, gw2.wineBinary, gw2.protonPath, gw2.source);
+
+        if (gw2.source == "steam") {
+            m_detailLabel->setText(
+                "<b>\u26A0\uFE0F  Steam install selected — ArenaNet account required</b><br><br>"
+                "Sir Launchalot <b>does not support Steam-linked GW2 accounts</b>. "
+                "Steam accounts authenticate through the Steam client, which cannot "
+                "be used across multiple prefixes.<br><br>"
+                "This will only work if you log in with a <b>separate ArenaNet account</b> "
+                "(created at <a href='https://account.arena.net'>account.arena.net</a>). "
+                "The <tt>-provider Portal</tt> flag will be added automatically to bypass "
+                "Steam login.<br><br>"
+                "If your only GW2 account is a Steam account, this install <b>will not work</b> "
+                "for multiboxing.");
+        } else {
+            m_detailLabel->setText("Select the installation to use as your <b>main account</b>, "
+                                   "then click <b>Next</b>.");
+        }
     } else {
         // "Browse manually..." selected (or nothing)
         m_selectedIndex = -1;
         if (wiz) wiz->setDetectedInstall({}, {}, {}, {});
+        m_detailLabel->setText("Select the installation to use as your <b>main account</b>, "
+                               "then click <b>Next</b>.");
     }
     emit completeChanged();
 }

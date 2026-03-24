@@ -31,8 +31,9 @@
 #include <QTextStream>
 #include <QTimer>
 
-MainWindow::MainWindow(QWidget *parent)
+MainWindow::MainWindow(bool devMode, QWidget *parent)
     : QMainWindow(parent)
+    , m_devMode(devMode)
 {
     // Create core managers
     m_overlayManager = new OverlayManager(this);
@@ -133,7 +134,7 @@ MainWindow::MainWindow(QWidget *parent)
         }
     }
 
-    setWindowTitle("Sir Launchalot");
+    setWindowTitle(m_devMode ? "Sir Launchalot [DEV MODE]" : "Sir Launchalot");
     resize(320, 280);
 }
 
@@ -219,7 +220,8 @@ void MainWindow::setupUi()
 
     // Log window (separate floating window)
     m_logWindow = new QWidget(nullptr, Qt::Window);
-    m_logWindow->setWindowTitle("Sir Launchalot \u2014 Log");
+    m_logWindow->setWindowTitle(m_devMode ? "Sir Launchalot [DEV MODE] \u2014 Log"
+                                         : "Sir Launchalot \u2014 Log");
     m_logWindow->resize(600, 350);
     m_logWindow->installEventFilter(this);
     auto *logLayout = new QVBoxLayout(m_logWindow);
@@ -258,6 +260,22 @@ void MainWindow::setupMenuBar()
     fileMenu->addAction("&Settings...", this, &MainWindow::onSettings);
     fileMenu->addAction("&Update Alts (after game patch)...", this, &MainWindow::onUpdateAlts);
     fileMenu->addSeparator();
+    fileMenu->addAction(m_devMode ? "Exit &Dev Mode" : "&Dev Mode...", this, [this]() {
+        if (!m_devMode) {
+            auto reply = QMessageBox::question(this, "Enter Dev Mode",
+                "Dev Mode uses a separate configuration so you can test\n"
+                "without affecting your real accounts.\n\n"
+                "The app will restart. Continue?",
+                QMessageBox::Yes | QMessageBox::No);
+            if (reply != QMessageBox::Yes) return;
+        }
+        // Restart the app with/without --dev
+        QStringList args = QApplication::arguments().mid(1);  // skip argv[0]
+        args.removeAll("--dev");
+        if (!m_devMode) args.append("--dev");
+        QProcess::startDetached(QApplication::applicationFilePath(), args);
+        QApplication::quit();
+    });
     fileMenu->addAction("&Quit", qApp, &QApplication::quit);
 
     auto *helpMenu = menuBar()->addMenu("&Help");
@@ -274,7 +292,7 @@ void MainWindow::setupMenuBar()
             "  • Per-account credentials and graphics settings\n"
             "  • Batch alt updates after game patches\n"
             "  • External app launcher integration\n"
-            "  • Lutris, Heroic & Faugus install detection\n\n"
+            "  • Lutris, Heroic, Faugus & Steam install detection\n\n"
             "Requires: rsync, Wine or Proton");
         about.setMinimumWidth(500);
         about.exec();
@@ -491,6 +509,14 @@ void MainWindow::runSetupWizard()
         mainAcct.id = "main";
         mainAcct.displayName = wizard.accountName();
         mainAcct.isMain = true;
+
+        // Steam installs require -provider Portal to bypass Steam auth
+        if (wizard.source() == "steam") {
+            if (!mainAcct.extraArgs.contains("-provider")) {
+                mainAcct.extraArgs << "-provider" << "Portal";
+            }
+        }
+
         m_accountManager->addAccount(mainAcct);
 
         appendLog(QString("Main account created: %1").arg(mainAcct.displayName));
@@ -816,6 +842,31 @@ void MainWindow::onLaunchExternalApp(const QString &appId)
                 appendLog(QString("ERROR: Empty command for '%1'").arg(app.name));
                 return;
             }
+
+            // If launching Steam GW2, install a .desktop file so KDE shows
+            // the GW2 icon instead of Sir Launchalot's
+            if (app.command.contains("1284210")) {
+                QString appsDir = QDir::homePath() + "/.local/share/applications";
+                QString desktopPath = appsDir + "/steam-gw2.desktop";
+                QString iconPath = QDir::homePath()
+                    + "/.local/share/icons/hicolor/256x256/apps/gw2.png";
+                if (!QFile::exists(iconPath)) iconPath = "gw2";
+
+                QDir().mkpath(appsDir);
+                QFile desktop(desktopPath);
+                if (desktop.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                    QTextStream ds(&desktop);
+                    ds << "[Desktop Entry]\n";
+                    ds << "Type=Application\n";
+                    ds << "Name=Guild Wars 2 (Steam)\n";
+                    ds << "Exec=steam steam://rungameid/1284210\n";
+                    ds << "StartupWMClass=steam_app_1284210\n";
+                    ds << "NoDisplay=true\n";
+                    ds << "Icon=" << iconPath << "\n";
+                }
+                QProcess::startDetached("update-desktop-database", {appsDir});
+            }
+
             // Clear desktop file hints so KDE doesn't show Sir Launchalot's
             // icon for the launched app, and use setsid for session detach
             QString program = args.takeFirst();

@@ -20,7 +20,7 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 public:
-    explicit MainWindow(QWidget *parent = nullptr);
+    explicit MainWindow(bool devMode = false, QWidget *parent = nullptr);
     ~MainWindow();
 
 protected:
@@ -74,6 +74,7 @@ private:
     QString m_basePrefix;
     QString m_gw2ExePath;
     bool m_wizardActive = false;
+    bool m_devMode = false;
 };
 
 #endif // MAINWINDOW_H

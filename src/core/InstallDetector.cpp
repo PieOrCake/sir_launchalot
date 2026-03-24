@@ -67,6 +67,7 @@ QList<InstallDetector::DetectedInstall> InstallDetector::discoverGW2Installs() c
     addResults(scanLutrisConfigs());
     addResults(scanHeroicConfigs());
     addResults(scanFaugusConfigs());
+    addResults(scanSteamConfigs());
 
     return results;
 }
@@ -339,6 +340,97 @@ QList<InstallDetector::DetectedInstall> InstallDetector::scanFaugusConfigs() con
             // without parsing its internal config. Default to GE-Proton (protonPath empty).
             results.append(game);
         }
+    }
+
+    return results;
+}
+
+QList<InstallDetector::DetectedInstall> InstallDetector::scanSteamConfigs() const
+{
+    QList<DetectedInstall> results;
+
+    // Common Steam root directories (native + Flatpak)
+    QStringList steamRoots = {
+        QDir::homePath() + "/.steam/steam",
+        QDir::homePath() + "/.local/share/Steam",
+        QDir::homePath() + "/.var/app/com.valvesoftware.Steam/.steam/steam",
+        QDir::homePath() + "/.var/app/com.valvesoftware.Steam/.local/share/Steam"
+    };
+
+    // Collect all Steam library folders from libraryfolders.vdf
+    QStringList libraryFolders;
+    for (const auto &root : steamRoots) {
+        QString vdfPath = root + "/steamapps/libraryfolders.vdf";
+        if (!QFile::exists(vdfPath)) continue;
+
+        // The root itself is always a library folder
+        libraryFolders.append(root);
+
+        // Parse libraryfolders.vdf for additional library paths
+        // Format: "path"		"/mnt/games/SteamLibrary"
+        QFile vdf(vdfPath);
+        if (vdf.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            QRegularExpression pathRe(R"re("path"\s+"([^"]+)")re");
+            QString content = vdf.readAll();
+            auto it = pathRe.globalMatch(content);
+            while (it.hasNext()) {
+                auto match = it.next();
+                QString libPath = match.captured(1);
+                if (!libraryFolders.contains(libPath))
+                    libraryFolders.append(libPath);
+            }
+            vdf.close();
+        }
+    }
+
+    // GW2 Steam app ID is 1284210
+    QSet<QString> seenPrefixes;
+    for (const auto &libFolder : libraryFolders) {
+        QString compatData = libFolder + "/steamapps/compatdata/1284210";
+        QString pfxPath = compatData + "/pfx";
+
+        if (!QDir(pfxPath).exists()) continue;
+
+        QString canonical = QFileInfo(pfxPath).canonicalFilePath();
+        if (canonical.isEmpty() || seenPrefixes.contains(canonical)) continue;
+
+        // Steam installs game files in steamapps/common/, not inside the prefix
+        QString gw2Exe;
+        QStringList commonCandidates = {
+            libFolder + "/steamapps/common/Guild Wars 2/Gw2-64.exe",
+            libFolder + "/steamapps/common/Guild Wars 2/Gw2.exe",
+        };
+        for (const auto &candidate : commonCandidates) {
+            if (QFile::exists(candidate)) {
+                gw2Exe = candidate;
+                break;
+            }
+        }
+        // Fallback: check inside the prefix too
+        if (gw2Exe.isEmpty()) gw2Exe = gw2ExeInPrefix(pfxPath);
+        if (gw2Exe.isEmpty()) continue;
+
+        seenPrefixes.insert(canonical);
+
+        DetectedInstall game;
+        game.name = "Guild Wars 2 (Steam)";
+        game.source = "steam";
+        game.winePrefix = pfxPath;
+        game.exePath = gw2Exe;
+
+        // Try to derive Proton path from config_info (first line is the Proton dir)
+        QString configInfo = compatData + "/config_info";
+        QFile ci(configInfo);
+        if (ci.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            QString protonDir = ci.readLine().trimmed();
+            ci.close();
+            // config_info first line is like /path/to/Proton - Experimental/
+            if (!protonDir.isEmpty() && QDir(protonDir).exists()) {
+                game.protonPath = protonDir;
+            }
+        }
+
+        results.append(game);
     }
 
     return results;

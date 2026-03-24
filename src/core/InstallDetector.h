@@ -21,7 +21,7 @@ public:
         QString wineBinary;     // path to wine binary used
         QString exePath;        // path to Gw2-64.exe
         QString protonPath;     // PROTONPATH for umu-run (empty = auto "GE-Proton")
-        QString source;         // "lutris", "heroic", "faugus"
+        QString source;         // "lutris", "heroic", "faugus", "steam"
         QMap<QString, QString> envVars;
     };
 
@@ -40,6 +40,7 @@ private:
     QList<DetectedInstall> scanLutrisConfigs() const;
     QList<DetectedInstall> scanHeroicConfigs() const;
     QList<DetectedInstall> scanFaugusConfigs() const;
+    QList<DetectedInstall> scanSteamConfigs() const;
     QString lutrisConfigDir() const;
 };
 

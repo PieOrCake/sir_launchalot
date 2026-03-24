@@ -1,6 +1,6 @@
 # Sir Launchalot
 
-A C++/Qt6 application for running multiple Guild Wars 2 accounts simultaneously (aka multiboxing) on Linux. Uses `umu-launcher` to run GW2 via Proton, with auto-detection of existing installations from Lutris, Heroic Games Launcher, and Faugus Launcher. Distributed as an AppImage.
+A C++/Qt6 application for running multiple Guild Wars 2 accounts simultaneously (aka multiboxing) on Linux. Uses `umu-launcher` to run GW2 via Proton, with auto-detection of existing installations from Lutris, Heroic Games Launcher, Faugus Launcher, and Steam. Distributed as an AppImage.
 
 ## AI Notice
 
@@ -14,7 +14,7 @@ If an LLM creating software upsets you, then perhaps this repo isn't for you. Mo
 
 ## Features
 
-- **Multi-launcher detection** — auto-detects GW2 installations from Lutris, Heroic Games Launcher, and Faugus Launcher
+- **Multi-launcher detection** — auto-detects GW2 installations from Lutris, Heroic Games Launcher, Faugus Launcher, and Steam
 - **umu-launcher integration** — launches all accounts (main and alts) via `umu-run` with Proton, giving direct process control and reliable exit detection
 - **Automatic credential capture** — Setup Wizard walks you through logging in as each alt
 - **Per-account addon toggle** — enable or disable addons (ArcDPS, Nexus, etc.) per alt
@@ -35,7 +35,8 @@ All accounts (main and alts) are launched via [`umu-launcher`](https://github.co
 ## Requirements
 
 - **`umu-launcher`** (`umu-run`) — install from your distro's package manager or from [GitHub](https://github.com/Open-Wine-Components/umu-launcher)
-- An existing GW2 WINEPREFIX from **Lutris**, **Heroic Games Launcher**, or **Faugus Launcher**
+- An existing GW2 WINEPREFIX from **Lutris**, **Heroic Games Launcher**, **Faugus Launcher**, or **Steam**
+- Steam users must log in with an ArenaNet account (`-provider Portal`); Steam-linked accounts cannot be multiboxed
 - `rsync` (installed by default on most distros)
 
 ## Running (AppImage)
@@ -47,7 +48,7 @@ chmod +x Sir_Launchalot-x86_64.AppImage
 ./Sir_Launchalot-x86_64.AppImage
 ```
 
-On first launch, the Setup Wizard will auto-detect your GW2 installation (from Lutris, Heroic, or Faugus) and create your main account.
+On first launch, the Setup Wizard will auto-detect your GW2 installation (from Lutris, Heroic, Faugus, or Steam) and create your main account.
 
 ## Building from Source
 
@@ -80,3 +81,7 @@ The AppImage will be created at `build/Sir_Launchalot-<version>-x86_64.AppImage`
 This project is licensed under the [GNU General Public License v3.0](LICENSE).
 
 This software is provided as-is, without a warranty of any kind. Use at your own risk. It might delete your files, melt your PC, burn your house down, or cause world peace. Probably not that last one, but we can hope.
+
+## Third-Party Dependencies
+
+The AppImage bundles [Qt 6](https://www.qt.io/) (Core, Gui, Widgets), licensed under the [LGPL v3](https://doc.qt.io/qt-6/lgpl.html).
