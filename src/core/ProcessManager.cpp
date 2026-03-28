@@ -12,6 +12,8 @@
 #include <QCryptographicHash>
 #include <QTextStream>
 #include <QTimer>
+#include <QGuiApplication>
+#include <QIcon>
 #include <QImage>
 #include <QPainter>
 #include <QFont>
@@ -854,10 +856,12 @@ void ProcessManager::ensureGw2Icon(const QString &exePath)
         }
     }
 
-    // Final fallback: copy our own icon as gw2.png
-    QString appIcon = QDir::homePath() + "/.local/share/icons/hicolor/256x256/apps/sir-launchalot.png";
-    if (QFile::exists(appIcon)) {
-        QFile::copy(appIcon, iconPath);
+    // Final fallback: save our application icon as gw2.png
+    QIcon appIcon = QGuiApplication::windowIcon();
+    if (!appIcon.isNull()) {
+        QPixmap pm = appIcon.pixmap(256, 256);
+        if (!pm.isNull())
+            pm.save(iconPath, "PNG");
     }
 }
 
