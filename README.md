@@ -62,9 +62,17 @@ cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
 ```
 
-### Build AppImage
+### Build AppImage (recommended)
 
-Requires `curl` for downloading linuxdeploy (cached after first run):
+Builds inside an Ubuntu 22.04 container for broad distro compatibility. Requires `podman` or `docker`:
+
+```bash
+./scripts/build-appimage-docker.sh
+```
+
+### Build AppImage (native)
+
+Builds directly on the host. The resulting AppImage may require a glibc version matching your system and may not run on older distros:
 
 ```bash
 ./scripts/build-appimage.sh
