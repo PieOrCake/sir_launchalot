@@ -41,9 +41,19 @@ All accounts (main and alts) are launched via [`umu-launcher`](https://github.co
 - Steam users must log in with an ArenaNet account (`-provider Portal`); Steam-linked accounts cannot be multiboxed
 - `rsync` (installed by default on most distros)
 
-## Running (AppImage)
+## Installation
 
-Download the latest `Sir_Launchalot-x86_64.AppImage` from Releases, then:
+### Using an AppImage Manager (recommended)
+
+1. Install [Gear Lever](https://flathub.org/apps/it.mijorus.gearlever) from Flathub
+2. Download the latest `.AppImage` from [Releases](https://github.com/PieOrCake/sir_launchalot/releases)
+3. Right-click the downloaded file and select **Open With → Gear Lever**
+
+Gear Lever will integrate the app into your desktop — no terminal needed.
+
+### Manual (terminal)
+
+Download the latest `.AppImage` from [Releases](https://github.com/PieOrCake/sir_launchalot/releases), then:
 
 ```bash
 chmod +x Sir_Launchalot-x86_64.AppImage
