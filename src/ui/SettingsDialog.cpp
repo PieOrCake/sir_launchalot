@@ -1,5 +1,6 @@
 #include "ui/SettingsDialog.h"
 
+#include <QCheckBox>
 #include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QFormLayout>
@@ -66,6 +67,13 @@ void SettingsDialog::setupUi()
 
     layout->addWidget(apiGroup);
 
+    // Updates group
+    auto *updatesGroup = new QGroupBox("Updates");
+    auto *updatesLayout = new QVBoxLayout(updatesGroup);
+    m_checkUpdatesBox = new QCheckBox("Check for new releases on startup");
+    updatesLayout->addWidget(m_checkUpdatesBox);
+    layout->addWidget(updatesGroup);
+
     // Buttons
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
@@ -121,5 +129,15 @@ void SettingsDialog::onBrowseExe()
     if (!path.isEmpty()) {
         m_exeEdit->setText(path);
     }
+}
+
+void SettingsDialog::setCheckForUpdatesEnabled(bool enabled)
+{
+    m_checkUpdatesBox->setChecked(enabled);
+}
+
+bool SettingsDialog::checkForUpdatesEnabled() const
+{
+    return m_checkUpdatesBox->isChecked();
 }
 

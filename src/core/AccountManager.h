@@ -23,6 +23,8 @@ public:
         QString id;
         QString displayName;
         bool isMain = false;        // main account uses base WINEPREFIX directly
+        bool isSteam = false;       // Steam account (launched via Steam, no prefix cloning)
+        QString launchCommand;      // custom launch command (used for Steam accounts)
         QString email;              // GW2 login email (passed via -email flag)
         QString password;           // GW2 login password (passed via -password flag)
         QString localDatPath;       // stored copy of Local.dat
@@ -70,6 +72,8 @@ public:
     QString protonPath() const;
     void setApiRefreshInterval(int minutes);
     int apiRefreshInterval() const;
+    void setCheckForUpdatesEnabled(bool enabled);
+    bool checkForUpdatesEnabled() const;
 
 signals:
     void accountAdded(const QString &id);
@@ -94,6 +98,7 @@ private:
     QString m_wineRunnerPath;
     QString m_protonPath;
     int m_apiRefreshInterval = 15;
+    bool m_checkForUpdatesEnabled = true;
 };
 
 #endif // ACCOUNTMANAGER_H

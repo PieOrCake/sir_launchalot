@@ -1,6 +1,7 @@
 #ifndef SETTINGSDIALOG_H
 #define SETTINGSDIALOG_H
 
+#include <QCheckBox>
 #include <QDialog>
 #include <QLabel>
 #include <QLineEdit>
@@ -22,6 +23,9 @@ public:
     void setApiRefreshInterval(int minutes);
     int apiRefreshInterval() const;
 
+    void setCheckForUpdatesEnabled(bool enabled);
+    bool checkForUpdatesEnabled() const;
+
 private slots:
     void onBrowsePrefix();
     void onBrowseExe();
@@ -33,6 +37,7 @@ private:
     QLineEdit *m_exeEdit;
     QSlider *m_apiRefreshSlider;
     QLabel *m_apiRefreshLabel;
+    QCheckBox *m_checkUpdatesBox;
 };
 
 #endif // SETTINGSDIALOG_H

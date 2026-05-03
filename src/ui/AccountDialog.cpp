@@ -34,6 +34,16 @@ void AccountDialog::setupUi()
     m_enableAddonsCheck->setChecked(true);
     layout->addWidget(m_enableAddonsCheck);
 
+    // Launch command (shown for Steam accounts only)
+    auto *cmdForm = new QFormLayout;
+    m_launchCommandEdit = new QLineEdit;
+    m_launchCommandEdit->setMinimumWidth(350);
+    cmdForm->addRow("Launch command:", m_launchCommandEdit);
+    layout->addLayout(cmdForm);
+    m_launchCommandLabel = cmdForm->labelForField(m_launchCommandEdit);
+    m_launchCommandEdit->setVisible(false);
+    m_launchCommandLabel->setVisible(false);
+
     // GW2 API section
     auto *apiGroup = new QGroupBox("GW2 API");
     auto *apiLayout = new QVBoxLayout(apiGroup);
@@ -71,13 +81,26 @@ void AccountDialog::setAccount(const AccountManager::Account &account)
 
     m_mainCheck->setChecked(account.isMain);
 
-    m_enableAddonsCheck->setChecked(account.enableAddons);
-    m_enableAddonsCheck->setVisible(!account.isMain);
+    if (account.isSteam) {
+        setSteamMode(account.launchCommand);
+    } else {
+        m_enableAddonsCheck->setChecked(account.enableAddons);
+        m_enableAddonsCheck->setVisible(!account.isMain);
+    }
 
     m_apiKeyEdit->setText(account.apiKey);
     m_showAccountNameCheck->setChecked(account.showAccountName);
     m_showDailyVaultCheck->setChecked(account.showDailyVault);
     m_showWeeklyVaultCheck->setChecked(account.showWeeklyVault);
+}
+
+void AccountDialog::setSteamMode(const QString &defaultCommand)
+{
+    m_steamMode = true;
+    m_enableAddonsCheck->setVisible(false);
+    m_launchCommandEdit->setVisible(true);
+    m_launchCommandLabel->setVisible(true);
+    m_launchCommandEdit->setText(defaultCommand);
 }
 
 AccountManager::Account AccountDialog::account() const
@@ -87,6 +110,8 @@ AccountManager::Account AccountDialog::account() const
                          : QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
     acct.displayName = m_nameEdit->text().trimmed();
     acct.isMain = m_mainCheck->isChecked();
+    acct.isSteam = m_steamMode;
+    acct.launchCommand = m_launchCommandEdit->text().trimmed();
     acct.enableAddons = m_enableAddonsCheck->isChecked();
     acct.apiKey = m_apiKeyEdit->text().trimmed();
     acct.showAccountName = m_showAccountNameCheck->isChecked();

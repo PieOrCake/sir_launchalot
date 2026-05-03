@@ -77,6 +77,17 @@ int AccountManager::apiRefreshInterval() const
     return m_apiRefreshInterval;
 }
 
+void AccountManager::setCheckForUpdatesEnabled(bool enabled)
+{
+    m_checkForUpdatesEnabled = enabled;
+    save();
+}
+
+bool AccountManager::checkForUpdatesEnabled() const
+{
+    return m_checkForUpdatesEnabled;
+}
+
 QString AccountManager::configFilePath() const
 {
     return m_configDir + "/accounts.json";
@@ -136,6 +147,7 @@ bool AccountManager::load()
     m_wineRunnerPath = root.value("wineRunnerPath").toString();
     m_protonPath = root.value("protonPath").toString();
     m_apiRefreshInterval = root.value("apiRefreshInterval").toInt(15);
+    m_checkForUpdatesEnabled = root.value("checkForUpdates").toBool(true);
 
     return true;
 }
@@ -171,6 +183,7 @@ bool AccountManager::save() const
     root["wineRunnerPath"] = m_wineRunnerPath;
     root["protonPath"] = m_protonPath;
     root["apiRefreshInterval"] = m_apiRefreshInterval;
+    root["checkForUpdates"] = m_checkForUpdatesEnabled;
 
     QFile file(configFilePath());
     if (!file.open(QIODevice::WriteOnly)) {
@@ -405,6 +418,8 @@ QJsonObject AccountManager::accountToJson(const Account &account) const
     obj["id"] = account.id;
     obj["displayName"] = account.displayName;
     obj["isMain"] = account.isMain;
+    if (account.isSteam) obj["isSteam"] = true;
+    if (!account.launchCommand.isEmpty()) obj["launchCommand"] = account.launchCommand;
     obj["email"] = account.email;
     obj["password"] = account.password;
     obj["localDatPath"] = account.localDatPath;
@@ -437,6 +452,8 @@ AccountManager::Account AccountManager::accountFromJson(const QJsonObject &obj) 
     acct.id = obj.value("id").toString();
     acct.displayName = obj.value("displayName").toString();
     acct.isMain = obj.value("isMain").toBool(false);
+    acct.isSteam = obj.value("isSteam").toBool(false);
+    acct.launchCommand = obj.value("launchCommand").toString();
     acct.email = obj.value("email").toString();
     acct.password = obj.value("password").toString();
     acct.localDatPath = obj.value("localDatPath").toString();

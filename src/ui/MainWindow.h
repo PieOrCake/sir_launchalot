@@ -15,6 +15,8 @@ class WineManager;
 class InstallDetector;
 class ProcessManager;
 class Gw2ApiClient;
+class UpdateChecker;
+class QSystemTrayIcon;
 
 class MainWindow : public QMainWindow
 {
@@ -57,6 +59,8 @@ private:
     void runSetupWizard();
 
     void fetchApiData();
+    void addSteamAlt();
+    void launchSteamAccount(const QString &accountId);
 
     // Core managers
     OverlayManager *m_overlayManager;
@@ -65,6 +69,8 @@ private:
     InstallDetector *m_detector;
     ProcessManager *m_processManager;
     Gw2ApiClient *m_apiClient;
+    UpdateChecker *m_updateChecker;
+    QSystemTrayIcon *m_trayIcon;
 
     // UI elements
     QListWidget *m_accountList;

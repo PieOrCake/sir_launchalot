@@ -9,6 +9,7 @@
 #include "core/InstallDetector.h"
 #include "core/ProcessManager.h"
 #include "core/Gw2ApiClient.h"
+#include "core/UpdateChecker.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -27,8 +28,12 @@
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QMessageBox>
+#include <QDesktopServices>
+#include <QSystemTrayIcon>
+#include <QUrl>
 #include <QDateTime>
 #include <QProcessEnvironment>
+#include <QStandardPaths>
 #include <QTextStream>
 #include <QTimer>
 
@@ -44,6 +49,8 @@ MainWindow::MainWindow(bool devMode, QWidget *parent)
     m_processManager = new ProcessManager(m_overlayManager, m_accountManager,
                                           m_wineManager, this);
     m_apiClient = new Gw2ApiClient(this);
+    m_updateChecker = new UpdateChecker(this);
+    m_trayIcon = new QSystemTrayIcon(this);
     connect(m_apiClient, &Gw2ApiClient::dataReady, this, [this](const QString &) {
         refreshAccountList();
         // Clear status if no more pending requests
@@ -95,6 +102,25 @@ MainWindow::MainWindow(bool devMode, QWidget *parent)
     refreshExternalAppList();
     fetchApiData();
     m_apiRefreshTimer->start(m_accountManager->apiRefreshInterval() * 60 * 1000);
+
+    // Update check — delayed so the window is fully shown before any notification fires
+    if (m_accountManager->checkForUpdatesEnabled()) {
+        m_trayIcon->setIcon(windowIcon());
+        connect(m_updateChecker, &UpdateChecker::updateAvailable, this,
+                [this](const QString &latestVersion) {
+            QString msg = QString("Version %1 is available. Get it at github.com/PieOrCake/sir_launchalot").arg(latestVersion);
+            if (QSystemTrayIcon::isSystemTrayAvailable()) {
+                m_trayIcon->show();
+                m_trayIcon->showMessage("Sir Launchalot Update Available", msg,
+                                        QSystemTrayIcon::Information, 8000);
+            } else {
+                appendLog("Update available: " + msg);
+            }
+        });
+        QTimer::singleShot(3000, this, [this]() {
+            m_updateChecker->check(APP_VERSION);
+        });
+    }
 
     // First run: show setup wizard; otherwise load saved settings
     if (m_accountManager->accounts().isEmpty()) {
@@ -300,11 +326,13 @@ void MainWindow::setupMenuBar()
             "  • External app launcher integration\n"
             "  • Lutris, Heroic, Faugus & Steam install detection\n\n"
             "Requires: umu-launcher, rsync");
-        about.setDetailedText(
-            "Project: https://github.com/PieOrCake/sir_launchalot\n"
-            "Licence: GNU General Public License v3.0 (GPLv3)");
+        auto *kofi = about.addButton("Buy me a coffee", QMessageBox::ActionRole);
+        about.addButton(QMessageBox::Close);
+        about.setDefaultButton(QMessageBox::Close);
         about.setMinimumWidth(500);
         about.exec();
+        if (about.clickedButton() == kofi)
+            QDesktopServices::openUrl(QUrl("https://ko-fi.com/pieorcake"));
     });
 }
 
@@ -365,6 +393,9 @@ void MainWindow::refreshAccountList()
             } else if (acct.isMain) {
                 statusLabel->setText("\u2605 Main");
                 statusLabel->setStyleSheet("color: #4fc3f7;");
+            } else if (acct.isSteam) {
+                statusLabel->setText("\u2693 Steam");
+                statusLabel->setStyleSheet("color: #4fc3f7;");
             } else {
                 QString savedLocalDat = m_overlayManager->dataDir() + "/" + acct.id + "/saved/Local.dat";
                 if (QFile::exists(savedLocalDat)) {
@@ -421,7 +452,8 @@ void MainWindow::refreshAccountList()
             rowLayout->addLayout(leftCol, 1);
 
             QString accountId = acct.id;
-            bool needsSetup = !acct.isMain &&
+            bool isSteam = acct.isSteam;
+            bool needsSetup = !acct.isMain && !acct.isSteam &&
                 !QFile::exists(m_overlayManager->dataDir() + "/" + acct.id + "/saved/Local.dat");
 
             auto *actionBtn = new QPushButton(isRunning ? "Stop" : "Launch");
@@ -431,14 +463,18 @@ void MainWindow::refreshAccountList()
             } else if (needsSetup) {
                 actionBtn->setEnabled(false);
                 actionBtn->setToolTip("Run Setup first (right-click \u2192 Setup Account)");
+            } else if (isSteam) {
+                actionBtn->setStyleSheet("background-color: #1565c0; color: white;");
             } else {
                 actionBtn->setStyleSheet("background-color: #2e7d32; color: white;");
                 actionBtn->setEnabled(!m_basePrefix.isEmpty());
             }
 
-            connect(actionBtn, &QPushButton::clicked, this, [this, accountId, isRunning]() {
+            connect(actionBtn, &QPushButton::clicked, this, [this, accountId, isRunning, isSteam]() {
                 if (isRunning) {
                     m_processManager->stopAccount(accountId);
+                } else if (isSteam) {
+                    launchSteamAccount(accountId);
                 } else {
                     appendLog(QString("Launching: %1").arg(accountId));
                     m_processManager->launchAccount(accountId, m_basePrefix, m_gw2ExePath);
@@ -590,6 +626,41 @@ void MainWindow::runSetupWizard()
 
 void MainWindow::onAddAccount()
 {
+    // Check for detected Steam install that could be added as a Steam alt
+    bool steamAvailable = false;
+    bool steamAlreadyAdded = false;
+    for (const auto &acct : m_accountManager->accounts()) {
+        if (acct.isSteam) { steamAlreadyAdded = true; break; }
+    }
+    if (!steamAlreadyAdded) {
+        auto installs = m_detector->discoverGW2Installs();
+        for (const auto &inst : installs) {
+            if (inst.source == "steam") {
+                // Only offer if Steam prefix isn't already the main account's prefix
+                if (QFileInfo(inst.winePrefix).canonicalFilePath() !=
+                    QFileInfo(m_basePrefix).canonicalFilePath()) {
+                    steamAvailable = true;
+                }
+                break;
+            }
+        }
+    }
+
+    if (steamAvailable) {
+        auto reply = QMessageBox::question(this, "Add Alt",
+            "A Steam GW2 installation was detected.\n\n"
+            "Would you like to add it as a Steam alt?\n"
+            "(Launches via Steam with API tracking \u2014 no prefix cloning needed.)\n\n"
+            "Click 'No' to add a regular alt instead.",
+            QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel);
+        if (reply == QMessageBox::Cancel) return;
+        if (reply == QMessageBox::Yes) {
+            addSteamAlt();
+            return;
+        }
+    }
+
+    // Regular alt flow
     if (m_basePrefix.isEmpty()) {
         QMessageBox::warning(this, "Not Ready",
             "Please run the Setup Wizard first (File menu) to detect your GW2 installation.");
@@ -616,6 +687,83 @@ void MainWindow::onAddAccount()
     updateButtonStates();
 }
 
+void MainWindow::addSteamAlt()
+{
+    // Auto-detect steam command (native vs flatpak)
+    QString steamCommand;
+    if (!QStandardPaths::findExecutable("steam").isEmpty()) {
+        steamCommand = "steam steam://rungameid/1284210";
+    } else {
+        steamCommand = "flatpak run com.valvesoftware.Steam steam://rungameid/1284210";
+    }
+
+    AccountDialog dlg(this);
+    dlg.setWindowTitle("Add Steam Alt");
+    dlg.setSteamMode(steamCommand);
+    if (dlg.exec() != QDialog::Accepted) return;
+
+    auto acct = dlg.account();
+    if (acct.displayName.isEmpty()) {
+        acct.displayName = "Steam";
+    }
+    acct.isSteam = true;
+
+    if (m_accountManager->addAccount(acct)) {
+        appendLog(QString("Added Steam alt: %1").arg(acct.displayName));
+        fetchApiData();
+        refreshAccountList();
+        updateButtonStates();
+    }
+}
+
+void MainWindow::launchSteamAccount(const QString &accountId)
+{
+    auto acct = m_accountManager->account(accountId);
+    if (acct.launchCommand.isEmpty()) {
+        appendLog(QString("ERROR: No launch command for Steam account '%1'")
+            .arg(acct.displayName));
+        return;
+    }
+
+    appendLog(QString("Launching Steam: %1 (%2)")
+        .arg(acct.displayName, acct.launchCommand));
+
+    // Install .desktop file for KDE taskbar icon
+    if (acct.launchCommand.contains("1284210")) {
+        QString appsDir = QDir::homePath() + "/.local/share/applications";
+        QString desktopPath = appsDir + "/steam-gw2.desktop";
+        QString iconPath = QDir::homePath()
+            + "/.local/share/icons/hicolor/256x256/apps/gw2.png";
+        if (!QFile::exists(iconPath)) iconPath = "gw2";
+
+        QDir().mkpath(appsDir);
+        QFile desktop(desktopPath);
+        if (desktop.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream ds(&desktop);
+            ds << "[Desktop Entry]\n";
+            ds << "Type=Application\n";
+            ds << "Name=GW2 - " << acct.displayName << "\n";
+            ds << "Exec=steam steam://rungameid/1284210\n";
+            ds << "StartupWMClass=steam_app_1284210\n";
+            ds << "NoDisplay=true\n";
+            ds << "Icon=" << iconPath << "\n";
+        }
+        QProcess::startDetached("update-desktop-database", {appsDir});
+    }
+
+    // Launch with env cleanup and session detach (same as external apps)
+    QStringList args = QProcess::splitCommand(acct.launchCommand);
+    if (args.isEmpty()) return;
+    QString program = args.takeFirst();
+    QStringList wrappedArgs;
+    wrappedArgs << "-u" << "GIO_LAUNCHED_DESKTOP_FILE"
+                << "-u" << "GIO_LAUNCHED_DESKTOP_FILE_PID"
+                << "-u" << "DESKTOP_STARTUP_ID"
+                << "-u" << "XDG_ACTIVATION_TOKEN"
+                << "setsid" << "--wait" << program << args;
+    QProcess::startDetached("env", wrappedArgs);
+}
+
 void MainWindow::onEditAccount()
 {
     auto items = m_accountList->selectedItems();
@@ -636,6 +784,7 @@ void MainWindow::onEditAccount()
         updated.gfxSettingsPath = acct.gfxSettingsPath;
         updated.extraArgs = acct.extraArgs;
         updated.envVars = acct.envVars;
+        // isSteam and launchCommand are managed by the dialog
         if (m_accountManager->updateAccount(updated)) {
             appendLog(QString("Updated account: %1").arg(updated.displayName));
             fetchApiData();
@@ -744,6 +893,7 @@ void MainWindow::onSettings()
     dlg.setBasePrefix(m_basePrefix);
     dlg.setGw2ExePath(m_gw2ExePath);
     dlg.setApiRefreshInterval(m_accountManager->apiRefreshInterval());
+    dlg.setCheckForUpdatesEnabled(m_accountManager->checkForUpdatesEnabled());
 
     if (dlg.exec() == QDialog::Accepted) {
         m_basePrefix = dlg.basePrefix();
@@ -754,6 +904,8 @@ void MainWindow::onSettings()
         int interval = dlg.apiRefreshInterval();
         m_accountManager->setApiRefreshInterval(interval);
         m_apiRefreshTimer->start(interval * 60 * 1000);
+
+        m_accountManager->setCheckForUpdatesEnabled(dlg.checkForUpdatesEnabled());
 
         appendLog("Settings updated.");
         refreshAccountList();
@@ -793,7 +945,7 @@ void MainWindow::onAccountContextMenu(const QPoint &pos)
     } else {
         auto acct = m_accountManager->account(id);
 
-        if (!acct.isMain) {
+        if (!acct.isMain && !acct.isSteam) {
             bool hasRunning = !m_processManager->runningAccounts().isEmpty();
             auto *setupAction = menu.addAction("Setup Account (re-capture credentials)");
             setupAction->setEnabled(!hasRunning);
@@ -963,10 +1115,10 @@ void MainWindow::onUpdateAlts()
         return;
     }
 
-    // Collect all alt account IDs that have saved credentials
+    // Collect all alt account IDs that have saved credentials (skip Steam alts)
     QStringList altIds;
     for (const auto &acct : m_accountManager->accounts()) {
-        if (!acct.isMain) {
+        if (!acct.isMain && !acct.isSteam) {
             QString savedLocalDat = m_overlayManager->dataDir() + "/" + acct.id + "/saved/Local.dat";
             if (QFile::exists(savedLocalDat)) {
                 altIds.append(acct.id);
