@@ -9,6 +9,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QTableWidget>
+#include <QMessageBox>
 #include <QUuid>
 #include <QVBoxLayout>
 
@@ -29,11 +30,11 @@ static bool editSidecar(AccountManager::SidecarProgram &sc, QWidget *parent)
     form->addRow("Exe path:", pathEdit);
 
     auto *argsEdit = new QLineEdit(sc.args.join(" "));
-    argsEdit->setPlaceholderText("Optional arguments");
+    argsEdit->setPlaceholderText("Space-separated; quoted args not supported");
     form->addRow("Arguments:", argsEdit);
 
     layout->addLayout(form);
-    auto *label = new QLabel("Use a Windows-style path relative to the Wine prefix.");
+    auto *label = new QLabel("Use an absolute Windows-style path, e.g. C:\\tools\\bridge.exe");
     label->setWordWrap(true);
     label->setStyleSheet("color: gray; font-size: 11px;");
     layout->addWidget(label);
@@ -44,8 +45,10 @@ static bool editSidecar(AccountManager::SidecarProgram &sc, QWidget *parent)
     layout->addWidget(buttons);
 
     if (dlg.exec() != QDialog::Accepted) return false;
-    if (nameEdit->text().trimmed().isEmpty() || pathEdit->text().trimmed().isEmpty())
+    if (nameEdit->text().trimmed().isEmpty() || pathEdit->text().trimmed().isEmpty()) {
+        QMessageBox::warning(parent, "Sidecar Program", "Name and Exe path are required.");
         return false;
+    }
 
     sc.name = nameEdit->text().trimmed();
     sc.exePath = pathEdit->text().trimmed();
@@ -136,8 +139,8 @@ void AccountDialog::setupUi()
 
     connect(scAddBtn, &QPushButton::clicked, this, [this]() {
         AccountManager::SidecarProgram sc;
-        sc.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
         if (editSidecar(sc, this)) {
+            sc.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
             m_sidecars.append(sc);
             refreshSidecarTable();
         }
