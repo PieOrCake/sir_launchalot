@@ -1,6 +1,7 @@
 #include "ui/AccountDialog.h"
 
 #include <QDialogButtonBox>
+#include <QFileDialog>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -8,6 +9,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QTableWidget>
 #include <QMessageBox>
 #include <QUuid>
@@ -27,7 +29,27 @@ static bool editSidecar(AccountManager::SidecarProgram &sc, QWidget *parent)
 
     auto *pathEdit = new QLineEdit(sc.exePath);
     pathEdit->setPlaceholderText(R"(e.g. C:\tools\winediscordipcbridge.exe)");
-    form->addRow("Exe path:", pathEdit);
+    auto *browseBtn = new QPushButton("Browse...");
+    auto *pathRow = new QHBoxLayout;
+    pathRow->addWidget(pathEdit);
+    pathRow->addWidget(browseBtn);
+    form->addRow("Exe path:", pathRow);
+    QObject::connect(browseBtn, &QPushButton::clicked, &dlg, [&pathEdit, &dlg]() {
+        QString start = QDir::homePath();
+        QString picked = QFileDialog::getOpenFileName(
+            &dlg, "Select Exe", start, "Executables (*.exe *.EXE);;All Files (*)");
+        if (picked.isEmpty()) return;
+        // Auto-convert Linux path inside a Wine prefix to Windows style
+        // e.g. /prefix/drive_c/tools/bridge.exe -> C:\tools\bridge.exe
+        static const QRegularExpression driveRe("/drive_([a-z])/");
+        auto m = driveRe.match(picked);
+        if (m.hasMatch()) {
+            QString rest = picked.mid(m.capturedEnd());
+            rest.replace('/', '\\');
+            picked = m.captured(1).toUpper() + ":\\" + rest;
+        }
+        pathEdit->setText(picked);
+    });
 
     auto *argsEdit = new QLineEdit(sc.args.join(" "));
     argsEdit->setPlaceholderText("Space-separated; quoted args not supported");
