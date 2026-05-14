@@ -107,6 +107,12 @@ private:
     // Patch detection: track Gw2.dat modification time across main launch
     QDateTime m_gw2DatMtimeBefore;
     QString m_gw2DatPath;           // path to Gw2.dat (derived from exePath)
+
+    QMap<QString, QList<QProcess*>> m_sidecars;
+
+    void launchSidecars(const QString &accountId, const QString &winePrefix);
+    void killSidecars(const QString &accountId);
+    QString windowsToLinuxPath(const QString &winPath, const QString &winePrefix) const;
 };
 
 #endif // PROCESSMANAGER_H

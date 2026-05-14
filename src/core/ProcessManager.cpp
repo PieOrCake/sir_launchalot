@@ -12,6 +12,7 @@
 #include <QCryptographicHash>
 #include <QTextStream>
 #include <QTimer>
+#include <QPointer>
 #include <QGuiApplication>
 #include <QIcon>
 #include <QImage>
@@ -122,6 +123,7 @@ bool ProcessManager::launchAccount(const QString &accountId,
         info.process = proc;
         m_instances[accountId] = info;
 
+        launchSidecars(accountId, basePrefix);
         proc->start("/bin/bash", {scriptPath});
         if (!proc->waitForStarted(10000)) {
             emit instanceError(accountId, "Failed to start launch script");
@@ -345,6 +347,7 @@ bool ProcessManager::launchAccount(const QString &accountId,
     info.process = proc;
     m_instances[accountId] = info;
 
+    launchSidecars(accountId, winePrefix);
     proc->start("/bin/bash", {scriptPath});
     if (!proc->waitForStarted(10000)) {
         emit instanceError(accountId, "Failed to start launch script");
@@ -361,6 +364,8 @@ bool ProcessManager::launchAccount(const QString &accountId,
 
 bool ProcessManager::stopAccount(const QString &accountId)
 {
+    killSidecars(accountId);
+
     if (!m_instances.contains(accountId)) {
         return true;
     }
@@ -772,6 +777,93 @@ QString ProcessManager::uniqueAppId(const QString &accountId)
     return QString::number(1284210000 + idHash);
 }
 
+QString ProcessManager::windowsToLinuxPath(const QString &winPath, const QString &winePrefix) const
+{
+    QString path = winPath;
+    path.replace('\\', '/');
+    // Convert drive letter: C:/foo -> {winePrefix}/drive_c/foo
+    if (path.size() >= 3 && path[1] == ':' && path[2] == '/') {
+        QString drive = QStringLiteral("drive_") + path[0].toLower();
+        path = winePrefix + "/" + drive + "/" + path.mid(3);
+    }
+    return path;
+}
+
+void ProcessManager::killSidecars(const QString &accountId)
+{
+    if (!m_sidecars.contains(accountId)) return;
+    for (auto *proc : m_sidecars[accountId]) {
+        proc->disconnect();
+        proc->terminate();
+        if (!proc->waitForFinished(3000))
+            proc->kill();
+        delete proc;
+    }
+    m_sidecars.remove(accountId);
+}
+
+void ProcessManager::launchSidecars(const QString &accountId, const QString &winePrefix)
+{
+    auto acct = m_accounts->account(accountId);
+    if (acct.sidecars.isEmpty()) return;
+
+    QString umuBin = QStandardPaths::findExecutable("umu-run");
+    if (umuBin.isEmpty()) umuBin = "umu-run";
+
+    for (const auto &sidecar : acct.sidecars) {
+        QString linuxPath = windowsToLinuxPath(sidecar.exePath, winePrefix);
+        if (!QFile::exists(linuxPath)) {
+            emit instanceOutput(accountId,
+                QString("Sidecar '%1': not found at %2, skipping.\n")
+                    .arg(sidecar.name, linuxPath));
+            continue;
+        }
+
+        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        env.insert("WINEPREFIX", winePrefix);
+        if (!m_protonPath.isEmpty()) env.insert("PROTONPATH", m_protonPath);
+        env.insert("GAMEID", "umu-1284210");
+        env.insert("STORE", "none");
+        for (auto it = acct.envVars.constBegin(); it != acct.envVars.constEnd(); ++it)
+            env.insert(it.key(), it.value());
+
+        auto *proc = new QProcess(this);
+        proc->setProcessEnvironment(env);
+        proc->setProcessChannelMode(QProcess::MergedChannels);
+
+        QPointer<QProcess> procPtr = proc;
+        connect(proc, &QProcess::readyReadStandardOutput, this, [this, procPtr, accountId]() {
+            if (procPtr) emit instanceOutput(accountId, procPtr->readAllStandardOutput());
+        });
+
+        QString scName = sidecar.name;
+        connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                this, [this, accountId, procPtr, scName](int exitCode, QProcess::ExitStatus) {
+            emit instanceOutput(accountId,
+                QString("Sidecar '%1' exited (code %2).\n").arg(scName).arg(exitCode));
+            if (m_sidecars.contains(accountId) && procPtr)
+                m_sidecars[accountId].removeAll(procPtr.data());
+            if (procPtr) procPtr->deleteLater();
+        });
+
+        QStringList args;
+        args << linuxPath << sidecar.args;
+        proc->start(umuBin, args);
+
+        if (!proc->waitForStarted(5000)) {
+            emit instanceOutput(accountId,
+                QString("Sidecar '%1': failed to start.\n").arg(scName));
+            proc->deleteLater();
+            continue;
+        }
+
+        m_sidecars[accountId].append(proc);
+        emit instanceOutput(accountId,
+            QString("Sidecar '%1' started (PID %2).\n")
+                .arg(scName).arg(proc->processId()));
+    }
+}
+
 void ProcessManager::installDesktopEntry(const QString &accountId,
                                           const QString &displayName,
                                           const QString &appId,
@@ -934,6 +1026,8 @@ void ProcessManager::onProcessFinished(int exitCode, QProcess::ExitStatus exitSt
     QString accountId = proc->property("accountId").toString();
     bool isUpdate = proc->property("isUpdate").toBool();
     bool isSetup = proc->property("isSetup").toBool();
+
+    killSidecars(accountId);
 
     if (m_instances.contains(accountId)) {
         m_instances[accountId].state = InstanceState::Stopped;
