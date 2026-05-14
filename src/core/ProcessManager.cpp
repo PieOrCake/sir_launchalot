@@ -873,9 +873,14 @@ void ProcessManager::launchSidecars(const QString &accountId, const QString &win
     if (acct.sidecars.isEmpty()) return;
 
     QString launchClient = findLaunchClient();
-    QString wineBin = findWineBinary();
+    // When injecting inside the container, use bare "wine64" — the container's PATH
+    // (set up by umu-run for the correct Proton version) resolves it to the same
+    // binary the wineserver was started with, avoiding version mismatches.
+    QString wineBin = (!pvBusName.isEmpty() && !launchClient.isEmpty())
+        ? QStringLiteral("wine64")
+        : findWineBinary();
 
-    if (!pvBusName.isEmpty() && !launchClient.isEmpty() && !wineBin.isEmpty()) {
+    if (!pvBusName.isEmpty() && !launchClient.isEmpty()) {
         emit instanceOutput(accountId,
             QString("Sidecar: injecting into pressure-vessel container %1\n").arg(pvBusName));
     } else if (wineBin.isEmpty()) {
@@ -920,7 +925,7 @@ void ProcessManager::launchSidecars(const QString &accountId, const QString &win
         // this shares GW2's wineserver so Windows named pipes are visible to both
         QString exe;
         QStringList args;
-        if (!pvBusName.isEmpty() && !launchClient.isEmpty() && !wineBin.isEmpty()) {
+        if (!pvBusName.isEmpty() && !launchClient.isEmpty()) {
             exe = launchClient;
             args << "--bus-name=" + pvBusName << "--" << wineBin << linuxPath << sidecar.args;
         } else {
