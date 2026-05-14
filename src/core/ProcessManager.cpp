@@ -123,10 +123,8 @@ bool ProcessManager::launchAccount(const QString &accountId,
         info.process = proc;
         m_instances[accountId] = info;
 
-        launchSidecars(accountId, basePrefix);
         proc->start("/bin/bash", {scriptPath});
         if (!proc->waitForStarted(10000)) {
-            killSidecars(accountId);
             emit instanceError(accountId, "Failed to start launch script");
             m_instances[accountId].state = InstanceState::Stopped;
             QFile::remove(scriptPath);
@@ -136,6 +134,13 @@ bool ProcessManager::launchAccount(const QString &accountId,
         m_instances[accountId].pid = proc->processId();
         m_instances[accountId].state = InstanceState::Running;
         emit instanceStarted(accountId);
+        // Delay sidecar launch so GW2's umu-run completes its steamrt3 setup
+        // before sidecars acquire the same lock (avoids SIGTERM / exit code 15)
+        QTimer::singleShot(5000, this, [this, accountId, basePrefix]() {
+            if (m_instances.contains(accountId) &&
+                m_instances[accountId].state == InstanceState::Running)
+                launchSidecars(accountId, basePrefix);
+        });
         return true;
     } else {
         emit instanceOutput(accountId, "=== Alt account launch (prefix clone) ===\n");
@@ -348,10 +353,8 @@ bool ProcessManager::launchAccount(const QString &accountId,
     info.process = proc;
     m_instances[accountId] = info;
 
-    launchSidecars(accountId, winePrefix);
     proc->start("/bin/bash", {scriptPath});
     if (!proc->waitForStarted(10000)) {
-        killSidecars(accountId);
         emit instanceError(accountId, "Failed to start launch script");
         m_instances[accountId].state = InstanceState::Stopped;
         QFile::remove(scriptPath);
@@ -361,6 +364,13 @@ bool ProcessManager::launchAccount(const QString &accountId,
     m_instances[accountId].pid = proc->processId();
     m_instances[accountId].state = InstanceState::Running;
     emit instanceStarted(accountId);
+    // Delay sidecar launch so GW2's umu-run completes its steamrt3 setup
+    // before sidecars acquire the same lock (avoids SIGTERM / exit code 15)
+    QTimer::singleShot(5000, this, [this, accountId, winePrefix]() {
+        if (m_instances.contains(accountId) &&
+            m_instances[accountId].state == InstanceState::Running)
+            launchSidecars(accountId, winePrefix);
+    });
     return true;
 }
 
