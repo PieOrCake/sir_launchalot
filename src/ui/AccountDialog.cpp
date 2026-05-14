@@ -15,7 +15,8 @@
 #include <QUuid>
 #include <QVBoxLayout>
 
-static bool editSidecar(AccountManager::SidecarProgram &sc, QWidget *parent)
+static bool editSidecar(AccountManager::SidecarProgram &sc, QWidget *parent,
+                        const QString &basePrefix = {})
 {
     QDialog dlg(parent);
     dlg.setWindowTitle(sc.id.isEmpty() ? "Add Sidecar" : "Edit Sidecar");
@@ -34,8 +35,9 @@ static bool editSidecar(AccountManager::SidecarProgram &sc, QWidget *parent)
     pathRow->addWidget(pathEdit);
     pathRow->addWidget(browseBtn);
     form->addRow("Exe path:", pathRow);
-    QObject::connect(browseBtn, &QPushButton::clicked, &dlg, [&pathEdit, &dlg]() {
-        QString start = QDir::homePath();
+    QObject::connect(browseBtn, &QPushButton::clicked, &dlg, [&pathEdit, &dlg, basePrefix]() {
+        QString driveC = basePrefix + "/drive_c";
+        QString start = QDir(driveC).exists() ? driveC : QDir::homePath();
         QString picked = QFileDialog::getOpenFileName(
             &dlg, "Select Exe", start, "Executables (*.exe *.EXE);;All Files (*)");
         if (picked.isEmpty()) return;
@@ -161,7 +163,7 @@ void AccountDialog::setupUi()
 
     connect(scAddBtn, &QPushButton::clicked, this, [this]() {
         AccountManager::SidecarProgram sc;
-        if (editSidecar(sc, this)) {
+        if (editSidecar(sc, this, m_basePrefix)) {
             sc.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
             m_sidecars.append(sc);
             refreshSidecarTable();
@@ -202,6 +204,11 @@ void AccountDialog::refreshSidecarTable()
         m_sidecarTable->setItem(i, 0, new QTableWidgetItem(m_sidecars[i].name));
         m_sidecarTable->setItem(i, 1, new QTableWidgetItem(m_sidecars[i].exePath));
     }
+}
+
+void AccountDialog::setBasePrefix(const QString &prefix)
+{
+    m_basePrefix = prefix;
 }
 
 void AccountDialog::setAccount(const AccountManager::Account &account)

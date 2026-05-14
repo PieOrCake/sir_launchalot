@@ -698,6 +698,7 @@ void MainWindow::addSteamAlt()
     }
 
     AccountDialog dlg(this);
+    dlg.setBasePrefix(m_accountManager->basePrefix());
     dlg.setWindowTitle("Add Steam Alt");
     dlg.setSteamMode(steamCommand);
     if (dlg.exec() != QDialog::Accepted) return;
@@ -773,6 +774,7 @@ void MainWindow::onEditAccount()
     auto acct = m_accountManager->account(id);
 
     AccountDialog dlg(this);
+    dlg.setBasePrefix(m_accountManager->basePrefix());
     dlg.setAccount(acct);
     if (dlg.exec() == QDialog::Accepted) {
         auto updated = dlg.account();
@@ -1185,6 +1187,17 @@ void MainWindow::onInstanceError(const QString &accountId, const QString &error)
 void MainWindow::onInstanceOutput(const QString &accountId, const QString &output)
 {
     appendLog(QString("[%1] %2").arg(accountId, output.trimmed()));
+
+    // Reflect umu-launcher runtime update progress in the status label so the
+    // user knows something is happening (updates can take 30s+ with no other UI feedback).
+    QString line = output.trimmed();
+    if (line.contains("Updating steamrt3") || line.contains("Downloading steamrt3")) {
+        m_statusLabel->setText("⏳ Updating umu runtime, please wait...");
+        m_statusLabel->setStyleSheet("color: #ffa726;");
+    } else if (line.contains("steamrt3 is up to date") || line.contains("mtree is OK")) {
+        m_statusLabel->setText("umu runtime up to date");
+        m_statusLabel->setStyleSheet("color: #9e9e9e;");
+    }
 }
 
 void MainWindow::fetchApiData()

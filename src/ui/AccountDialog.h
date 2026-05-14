@@ -18,6 +18,7 @@ public:
 
     void setAccount(const AccountManager::Account &account);
     void setSteamMode(const QString &defaultCommand);
+    void setBasePrefix(const QString &prefix);
     AccountManager::Account account() const;
 
 private:
@@ -26,6 +27,7 @@ private:
     bool m_editMode = false;
     bool m_steamMode = false;
     QString m_accountId;
+    QString m_basePrefix;
     QLineEdit *m_nameEdit;
     QCheckBox *m_mainCheck;
     QCheckBox *m_enableAddonsCheck;
