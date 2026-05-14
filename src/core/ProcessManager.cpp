@@ -821,7 +821,7 @@ void ProcessManager::launchSidecars(const QString &accountId, const QString &win
 
         QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
         env.insert("WINEPREFIX", winePrefix);
-        if (!m_protonPath.isEmpty()) env.insert("PROTONPATH", m_protonPath);
+        env.insert("PROTONPATH", m_protonPath.isEmpty() ? QStringLiteral("GE-Proton") : m_protonPath);
         env.insert("GAMEID", "umu-1284210");
         env.insert("STORE", "none");
         for (auto it = acct.envVars.constBegin(); it != acct.envVars.constEnd(); ++it)
