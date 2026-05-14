@@ -126,6 +126,7 @@ bool ProcessManager::launchAccount(const QString &accountId,
         launchSidecars(accountId, basePrefix);
         proc->start("/bin/bash", {scriptPath});
         if (!proc->waitForStarted(10000)) {
+            killSidecars(accountId);
             emit instanceError(accountId, "Failed to start launch script");
             m_instances[accountId].state = InstanceState::Stopped;
             QFile::remove(scriptPath);
@@ -350,6 +351,7 @@ bool ProcessManager::launchAccount(const QString &accountId,
     launchSidecars(accountId, winePrefix);
     proc->start("/bin/bash", {scriptPath});
     if (!proc->waitForStarted(10000)) {
+        killSidecars(accountId);
         emit instanceError(accountId, "Failed to start launch script");
         m_instances[accountId].state = InstanceState::Stopped;
         QFile::remove(scriptPath);
@@ -792,14 +794,14 @@ QString ProcessManager::windowsToLinuxPath(const QString &winPath, const QString
 void ProcessManager::killSidecars(const QString &accountId)
 {
     if (!m_sidecars.contains(accountId)) return;
-    for (auto *proc : m_sidecars[accountId]) {
+    const QList<QProcess*> procs = m_sidecars.take(accountId);
+    for (auto *proc : procs) {
         proc->disconnect();
         proc->terminate();
         if (!proc->waitForFinished(3000))
             proc->kill();
-        delete proc;
+        proc->deleteLater();
     }
-    m_sidecars.remove(accountId);
 }
 
 void ProcessManager::launchSidecars(const QString &accountId, const QString &winePrefix)
