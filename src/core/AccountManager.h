@@ -19,6 +19,13 @@ public:
         QString command;
     };
 
+    struct SidecarProgram {
+        QString id;
+        QString name;
+        QString exePath;   // Windows-style path, e.g. C:\tools\bridge.exe
+        QStringList args;
+    };
+
     struct Account {
         QString id;
         QString displayName;
@@ -31,6 +38,7 @@ public:
         QString gfxSettingsPath;    // stored copy of GFXSettings
         bool enableAddons = true;    // include addon DLLs when cloning prefix
         QStringList extraArgs;      // additional GW2 command-line args
+        QList<SidecarProgram> sidecars;
         QMap<QString, QString> envVars; // additional environment variables
         QString apiKey;             // GW2 API key for account data
         bool showAccountName = false;   // display API account name

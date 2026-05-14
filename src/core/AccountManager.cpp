@@ -438,6 +438,19 @@ QJsonObject AccountManager::accountToJson(const Account &account) const
     }
     obj["envVars"] = envObj;
 
+    QJsonArray sidecarsArr;
+    for (const auto &sc : account.sidecars) {
+        QJsonObject scObj;
+        scObj["id"] = sc.id;
+        scObj["name"] = sc.name;
+        scObj["exePath"] = sc.exePath;
+        QJsonArray scArgs;
+        for (const auto &a : sc.args) scArgs.append(a);
+        scObj["args"] = scArgs;
+        sidecarsArr.append(scObj);
+    }
+    obj["sidecars"] = sidecarsArr;
+
     if (!account.apiKey.isEmpty()) obj["apiKey"] = account.apiKey;
     obj["showAccountName"] = account.showAccountName;
     obj["showDailyVault"] = account.showDailyVault;
@@ -468,6 +481,18 @@ AccountManager::Account AccountManager::accountFromJson(const QJsonObject &obj) 
     QJsonObject envObj = obj.value("envVars").toObject();
     for (auto it = envObj.constBegin(); it != envObj.constEnd(); ++it) {
         acct.envVars[it.key()] = it.value().toString();
+    }
+
+    QJsonArray sidecarsArr = obj.value("sidecars").toArray();
+    for (const auto &val : sidecarsArr) {
+        QJsonObject scObj = val.toObject();
+        SidecarProgram sc;
+        sc.id = scObj.value("id").toString();
+        sc.name = scObj.value("name").toString();
+        sc.exePath = scObj.value("exePath").toString();
+        QJsonArray scArgs = scObj.value("args").toArray();
+        for (const auto &a : scArgs) sc.args.append(a.toString());
+        acct.sidecars.append(sc);
     }
 
     acct.apiKey = obj.value("apiKey").toString();
