@@ -109,11 +109,14 @@ private:
     QString m_gw2DatPath;           // path to Gw2.dat (derived from exePath)
 
     QMap<QString, QList<QProcess*>> m_sidecars;
+    QMap<QString, QString> m_sidecarPendingPrefix;  // waiting for pressure-vessel bus name
 
-    void launchSidecars(const QString &accountId, const QString &winePrefix);
+    void launchSidecars(const QString &accountId, const QString &winePrefix,
+                        const QString &pvBusName);
     void killSidecars(const QString &accountId);
     QString windowsToLinuxPath(const QString &winPath, const QString &winePrefix) const;
     QString findWineBinary() const;
+    QString findLaunchClient() const;
 };
 
 #endif // PROCESSMANAGER_H

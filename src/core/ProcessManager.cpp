@@ -4,6 +4,7 @@
 #include "core/WineManager.h"
 
 #include <QDir>
+#include <QRegularExpression>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -110,7 +111,17 @@ bool ProcessManager::launchAccount(const QString &accountId,
                 this, &ProcessManager::onProcessError);
         connect(proc, &QProcess::readyReadStandardOutput, this, [this, proc]() {
             QString accountId = proc->property("accountId").toString();
-            emit instanceOutput(accountId, proc->readAllStandardOutput());
+            QString output = proc->readAllStandardOutput();
+            emit instanceOutput(accountId, output);
+            // Parse pressure-vessel bus name to inject sidecars into GW2's container
+            if (m_sidecarPendingPrefix.contains(accountId)) {
+                static const QRegularExpression busRe("--bus-name=(:\\d+\\.\\d+)");
+                auto m = busRe.match(output);
+                if (m.hasMatch()) {
+                    QString winePrefix = m_sidecarPendingPrefix.take(accountId);
+                    launchSidecars(accountId, winePrefix, m.captured(1));
+                }
+            }
         });
         connect(proc, &QProcess::readyReadStandardError, this, [this, proc]() {
             QString accountId = proc->property("accountId").toString();
@@ -123,9 +134,10 @@ bool ProcessManager::launchAccount(const QString &accountId,
         info.process = proc;
         m_instances[accountId] = info;
 
-        launchSidecars(accountId, basePrefix);
+        m_sidecarPendingPrefix[accountId] = basePrefix;
         proc->start("/bin/bash", {scriptPath});
         if (!proc->waitForStarted(10000)) {
+            m_sidecarPendingPrefix.remove(accountId);
             killSidecars(accountId);
             emit instanceError(accountId, "Failed to start launch script");
             m_instances[accountId].state = InstanceState::Stopped;
@@ -335,7 +347,16 @@ bool ProcessManager::launchAccount(const QString &accountId,
             this, &ProcessManager::onProcessError);
     connect(proc, &QProcess::readyReadStandardOutput, this, [this, proc]() {
         QString accountId = proc->property("accountId").toString();
-        emit instanceOutput(accountId, proc->readAllStandardOutput());
+        QString output = proc->readAllStandardOutput();
+        emit instanceOutput(accountId, output);
+        if (m_sidecarPendingPrefix.contains(accountId)) {
+            static const QRegularExpression busRe("--bus-name=(:\\d+\\.\\d+)");
+            auto m = busRe.match(output);
+            if (m.hasMatch()) {
+                QString winePrefix = m_sidecarPendingPrefix.take(accountId);
+                launchSidecars(accountId, winePrefix, m.captured(1));
+            }
+        }
     });
     connect(proc, &QProcess::readyReadStandardError, this, [this, proc]() {
         QString accountId = proc->property("accountId").toString();
@@ -348,9 +369,10 @@ bool ProcessManager::launchAccount(const QString &accountId,
     info.process = proc;
     m_instances[accountId] = info;
 
-    launchSidecars(accountId, winePrefix);
+    m_sidecarPendingPrefix[accountId] = winePrefix;
     proc->start("/bin/bash", {scriptPath});
     if (!proc->waitForStarted(10000)) {
+        m_sidecarPendingPrefix.remove(accountId);
         killSidecars(accountId);
         emit instanceError(accountId, "Failed to start launch script");
         m_instances[accountId].state = InstanceState::Stopped;
@@ -366,6 +388,7 @@ bool ProcessManager::launchAccount(const QString &accountId,
 
 bool ProcessManager::stopAccount(const QString &accountId)
 {
+    m_sidecarPendingPrefix.remove(accountId);
     killSidecars(accountId);
 
     if (!m_instances.contains(accountId)) {
@@ -810,13 +833,10 @@ void ProcessManager::killSidecars(const QString &accountId)
 
 QString ProcessManager::findWineBinary() const
 {
-    // If m_protonPath is a real directory, use Proton's own wine binary
     if (!m_protonPath.isEmpty() && m_protonPath != QStringLiteral("GE-Proton")) {
         QString wine64 = m_protonPath + "/files/bin/wine64";
         if (QFile::exists(wine64)) return wine64;
     }
-
-    // GE-Proton is cached in ~/.local/share/umu/ — find the latest installed version
     QDir umuDir(QDir::homePath() + "/.local/share/umu");
     if (umuDir.exists()) {
         QStringList entries = umuDir.entryList({"GE-Proton*"}, QDir::Dirs, QDir::Name | QDir::Reversed);
@@ -825,20 +845,32 @@ QString ProcessManager::findWineBinary() const
             if (QFile::exists(wine64)) return wine64;
         }
     }
-
-    // Fall back to system wine
     QString wine64 = QStandardPaths::findExecutable("wine64");
     if (!wine64.isEmpty()) return wine64;
     return QStandardPaths::findExecutable("wine");
 }
 
-void ProcessManager::launchSidecars(const QString &accountId, const QString &winePrefix)
+QString ProcessManager::findLaunchClient() const
+{
+    // steam-runtime-launch-client is installed alongside steamrt3 by umu
+    QString path = QDir::homePath()
+        + "/.local/share/umu/steamrt3/pressure-vessel/bin/steam-runtime-launch-client";
+    return QFile::exists(path) ? path : QString();
+}
+
+void ProcessManager::launchSidecars(const QString &accountId, const QString &winePrefix,
+                                     const QString &pvBusName)
 {
     auto acct = m_accounts->account(accountId);
     if (acct.sidecars.isEmpty()) return;
 
+    QString launchClient = findLaunchClient();
     QString wineBin = findWineBinary();
-    if (wineBin.isEmpty()) {
+
+    if (!pvBusName.isEmpty() && !launchClient.isEmpty() && !wineBin.isEmpty()) {
+        emit instanceOutput(accountId,
+            QString("Sidecar: injecting into pressure-vessel container %1\n").arg(pvBusName));
+    } else if (wineBin.isEmpty()) {
         emit instanceOutput(accountId, "Sidecar: cannot find Wine binary, sidecars skipped.\n");
         return;
     }
@@ -876,9 +908,18 @@ void ProcessManager::launchSidecars(const QString &accountId, const QString &win
             if (procPtr) procPtr->deleteLater();
         });
 
+        // Run inside GW2's pressure-vessel container if we have the bus name —
+        // this shares GW2's wineserver so Windows named pipes are visible to both
+        QString exe;
         QStringList args;
-        args << linuxPath << sidecar.args;
-        proc->start(wineBin, args);
+        if (!pvBusName.isEmpty() && !launchClient.isEmpty() && !wineBin.isEmpty()) {
+            exe = launchClient;
+            args << "--bus-name=" + pvBusName << "--" << wineBin << linuxPath << sidecar.args;
+        } else {
+            exe = wineBin;
+            args << linuxPath << sidecar.args;
+        }
+        proc->start(exe, args);
 
         if (!proc->waitForStarted(5000)) {
             emit instanceOutput(accountId,
@@ -1057,6 +1098,7 @@ void ProcessManager::onProcessFinished(int exitCode, QProcess::ExitStatus exitSt
     bool isUpdate = proc->property("isUpdate").toBool();
     bool isSetup = proc->property("isSetup").toBool();
 
+    m_sidecarPendingPrefix.remove(accountId);
     killSidecars(accountId);
 
     if (m_instances.contains(accountId)) {
