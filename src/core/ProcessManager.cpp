@@ -387,8 +387,12 @@ bool ProcessManager::stopAccount(const QString &accountId)
         }
     }
 
-    info.state = InstanceState::Stopped;
-    emit instanceStopped(accountId);
+    // onProcessFinished may have fired inside waitForFinished and already
+    // emitted instanceStopped — only emit if it hasn't done so yet
+    if (info.state != InstanceState::Stopped) {
+        info.state = InstanceState::Stopped;
+        emit instanceStopped(accountId);
+    }
     return true;
 }
 
