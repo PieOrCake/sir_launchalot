@@ -109,23 +109,26 @@ bool ProcessManager::launchAccount(const QString &accountId,
                 this, &ProcessManager::onProcessFinished);
         connect(proc, &QProcess::errorOccurred,
                 this, &ProcessManager::onProcessError);
-        connect(proc, &QProcess::readyReadStandardOutput, this, [this, proc]() {
+        auto checkBusName = [this](const QString &accountId, const QString &output) {
+            if (!m_sidecarPendingPrefix.contains(accountId)) return;
+            static const QRegularExpression busRe("--bus-name=(:\\d+\\.\\d+)");
+            auto m = busRe.match(output);
+            if (m.hasMatch()) {
+                QString winePrefix = m_sidecarPendingPrefix.take(accountId);
+                launchSidecars(accountId, winePrefix, m.captured(1));
+            }
+        };
+        connect(proc, &QProcess::readyReadStandardOutput, this, [this, proc, checkBusName]() {
             QString accountId = proc->property("accountId").toString();
             QString output = proc->readAllStandardOutput();
             emit instanceOutput(accountId, output);
-            // Parse pressure-vessel bus name to inject sidecars into GW2's container
-            if (m_sidecarPendingPrefix.contains(accountId)) {
-                static const QRegularExpression busRe("--bus-name=(:\\d+\\.\\d+)");
-                auto m = busRe.match(output);
-                if (m.hasMatch()) {
-                    QString winePrefix = m_sidecarPendingPrefix.take(accountId);
-                    launchSidecars(accountId, winePrefix, m.captured(1));
-                }
-            }
+            checkBusName(accountId, output);
         });
-        connect(proc, &QProcess::readyReadStandardError, this, [this, proc]() {
+        connect(proc, &QProcess::readyReadStandardError, this, [this, proc, checkBusName]() {
             QString accountId = proc->property("accountId").toString();
-            emit instanceOutput(accountId, proc->readAllStandardError());
+            QString output = proc->readAllStandardError();
+            emit instanceOutput(accountId, output);
+            checkBusName(accountId, output);
         });
 
         InstanceInfo info;
@@ -345,22 +348,26 @@ bool ProcessManager::launchAccount(const QString &accountId,
             this, &ProcessManager::onProcessFinished);
     connect(proc, &QProcess::errorOccurred,
             this, &ProcessManager::onProcessError);
-    connect(proc, &QProcess::readyReadStandardOutput, this, [this, proc]() {
+    auto checkBusName = [this](const QString &accountId, const QString &output) {
+        if (!m_sidecarPendingPrefix.contains(accountId)) return;
+        static const QRegularExpression busRe("--bus-name=(:\\d+\\.\\d+)");
+        auto m = busRe.match(output);
+        if (m.hasMatch()) {
+            QString winePrefix = m_sidecarPendingPrefix.take(accountId);
+            launchSidecars(accountId, winePrefix, m.captured(1));
+        }
+    };
+    connect(proc, &QProcess::readyReadStandardOutput, this, [this, proc, checkBusName]() {
         QString accountId = proc->property("accountId").toString();
         QString output = proc->readAllStandardOutput();
         emit instanceOutput(accountId, output);
-        if (m_sidecarPendingPrefix.contains(accountId)) {
-            static const QRegularExpression busRe("--bus-name=(:\\d+\\.\\d+)");
-            auto m = busRe.match(output);
-            if (m.hasMatch()) {
-                QString winePrefix = m_sidecarPendingPrefix.take(accountId);
-                launchSidecars(accountId, winePrefix, m.captured(1));
-            }
-        }
+        checkBusName(accountId, output);
     });
-    connect(proc, &QProcess::readyReadStandardError, this, [this, proc]() {
+    connect(proc, &QProcess::readyReadStandardError, this, [this, proc, checkBusName]() {
         QString accountId = proc->property("accountId").toString();
-        emit instanceOutput(accountId, proc->readAllStandardError());
+        QString output = proc->readAllStandardError();
+        emit instanceOutput(accountId, output);
+        checkBusName(accountId, output);
     });
 
     InstanceInfo info;
