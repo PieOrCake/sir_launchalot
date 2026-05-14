@@ -3,9 +3,9 @@ _2026-05-14_
 
 ## Overview
 
-Allow the main GW2 account to launch one or more auxiliary Windows executables alongside GW2, running inside the same Wine/Proton prefix. Primary use case: `winediscordipcbridge.exe` for Discord Rich Presence, but the feature is generic.
+Allow any GW2 account to launch one or more auxiliary Windows executables alongside GW2, running inside the same Wine/Proton prefix. Primary use case: `winediscordipcbridge.exe` for Discord Rich Presence, but the feature is generic.
 
-Sidecars apply to the **main account only**. Alt accounts are unaffected.
+Sidecars are supported for **all accounts** — main and alts alike. Each sidecar runs in whichever prefix that account uses (base prefix for main, cloned prefix for alts).
 
 ---
 
@@ -28,7 +28,7 @@ The main `Account` struct gains a `QList<SidecarProgram> sidecars` field. Serial
 
 ## UI
 
-A **"Sidecar Programs"** section is added to `AccountDialog`, visible only when editing the main account (`acct.isMain == true`).
+A **"Sidecar Programs"** section is added to `AccountDialog`, visible for all accounts.
 
 - A `QTableWidget` lists current sidecars (columns: Name, Exe Path).
 - **Add** button opens a small `QDialog` with fields: Name, Exe Path, Arguments.
@@ -41,12 +41,12 @@ No changes to any other dialog or window.
 
 ## Launch Flow (`ProcessManager`)
 
-In `launchAccount`, after confirming `acct.isMain` and before writing the GW2 launch script:
+In `launchAccount`, just before writing the GW2 launch script (after the prefix is resolved for both main and alts):
 
 1. Iterate `acct.sidecars`.
-2. For each entry, call a new helper `launchSidecar(accountId, sidecar, basePrefix)` which:
-   - Constructs a Windows→Wine path translation for `exePath`.
-   - Spawns `umu-run` with the same `WINEPREFIX`, `PROTONPATH`, and env vars as the main GW2 launch.
+2. For each entry, call a new helper `launchSidecar(accountId, sidecar, winePrefix)` which:
+   - Uses `winePrefix` — the base prefix for main, the cloned prefix for alts.
+   - Spawns `umu-run` with the same `WINEPREFIX`, `PROTONPATH`, and env vars as the GW2 launch.
    - Stores the resulting `QProcess*` in `m_sidecars[accountId]`.
 3. GW2 is then launched as normal.
 
@@ -72,6 +72,5 @@ When the GW2 `QProcess` emits `finished` for the main account, the existing clea
 
 ## Out of Scope
 
-- Sidecar support for alt accounts.
 - Auto-downloading or bundling any sidecar exe.
 - Showing per-sidecar status in the main window.
