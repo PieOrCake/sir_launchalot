@@ -4,6 +4,8 @@
 #include <QCheckBox>
 #include <QDialog>
 #include <QLineEdit>
+#include <QList>
+#include <QTableWidget>
 
 #include "core/AccountManager.h"
 
@@ -33,6 +35,9 @@ private:
     QCheckBox *m_showAccountNameCheck;
     QCheckBox *m_showDailyVaultCheck;
     QCheckBox *m_showWeeklyVaultCheck;
+    QTableWidget *m_sidecarTable;
+    QList<AccountManager::SidecarProgram> m_sidecars;
+    void refreshSidecarTable();
 };
 
 #endif // ACCOUNTDIALOG_H
