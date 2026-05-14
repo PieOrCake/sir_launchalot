@@ -844,11 +844,12 @@ QString ProcessManager::findWineBinary() const
         QString wine64 = m_protonPath + "/files/bin/wine64";
         if (QFile::exists(wine64)) return wine64;
     }
-    QDir umuDir(QDir::homePath() + "/.local/share/umu");
-    if (umuDir.exists()) {
-        QStringList entries = umuDir.entryList({"GE-Proton*"}, QDir::Dirs, QDir::Name | QDir::Reversed);
+    // umu stores GE-Proton under ~/.local/share/umu/compatibilitytools/
+    QDir ctDir(QDir::homePath() + "/.local/share/umu/compatibilitytools");
+    if (ctDir.exists()) {
+        QStringList entries = ctDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name | QDir::Reversed);
         for (const auto &entry : entries) {
-            QString wine64 = umuDir.absoluteFilePath(entry) + "/files/bin/wine64";
+            QString wine64 = ctDir.absoluteFilePath(entry) + "/files/bin/wine64";
             if (QFile::exists(wine64)) return wine64;
         }
     }
