@@ -123,8 +123,10 @@ bool ProcessManager::launchAccount(const QString &accountId,
         info.process = proc;
         m_instances[accountId] = info;
 
+        launchSidecars(accountId, basePrefix);
         proc->start("/bin/bash", {scriptPath});
         if (!proc->waitForStarted(10000)) {
+            killSidecars(accountId);
             emit instanceError(accountId, "Failed to start launch script");
             m_instances[accountId].state = InstanceState::Stopped;
             QFile::remove(scriptPath);
@@ -134,13 +136,6 @@ bool ProcessManager::launchAccount(const QString &accountId,
         m_instances[accountId].pid = proc->processId();
         m_instances[accountId].state = InstanceState::Running;
         emit instanceStarted(accountId);
-        // Delay sidecar launch so GW2's umu-run completes its steamrt3 setup
-        // before sidecars acquire the same lock (avoids SIGTERM / exit code 15)
-        QTimer::singleShot(5000, this, [this, accountId, basePrefix]() {
-            if (m_instances.contains(accountId) &&
-                m_instances[accountId].state == InstanceState::Running)
-                launchSidecars(accountId, basePrefix);
-        });
         return true;
     } else {
         emit instanceOutput(accountId, "=== Alt account launch (prefix clone) ===\n");
@@ -353,8 +348,10 @@ bool ProcessManager::launchAccount(const QString &accountId,
     info.process = proc;
     m_instances[accountId] = info;
 
+    launchSidecars(accountId, winePrefix);
     proc->start("/bin/bash", {scriptPath});
     if (!proc->waitForStarted(10000)) {
+        killSidecars(accountId);
         emit instanceError(accountId, "Failed to start launch script");
         m_instances[accountId].state = InstanceState::Stopped;
         QFile::remove(scriptPath);
@@ -364,13 +361,6 @@ bool ProcessManager::launchAccount(const QString &accountId,
     m_instances[accountId].pid = proc->processId();
     m_instances[accountId].state = InstanceState::Running;
     emit instanceStarted(accountId);
-    // Delay sidecar launch so GW2's umu-run completes its steamrt3 setup
-    // before sidecars acquire the same lock (avoids SIGTERM / exit code 15)
-    QTimer::singleShot(5000, this, [this, accountId, winePrefix]() {
-        if (m_instances.contains(accountId) &&
-            m_instances[accountId].state == InstanceState::Running)
-            launchSidecars(accountId, winePrefix);
-    });
     return true;
 }
 
@@ -814,13 +804,40 @@ void ProcessManager::killSidecars(const QString &accountId)
     }
 }
 
+QString ProcessManager::findWineBinary() const
+{
+    // If m_protonPath is a real directory, use Proton's own wine binary
+    if (!m_protonPath.isEmpty() && m_protonPath != QStringLiteral("GE-Proton")) {
+        QString wine64 = m_protonPath + "/files/bin/wine64";
+        if (QFile::exists(wine64)) return wine64;
+    }
+
+    // GE-Proton is cached in ~/.local/share/umu/ — find the latest installed version
+    QDir umuDir(QDir::homePath() + "/.local/share/umu");
+    if (umuDir.exists()) {
+        QStringList entries = umuDir.entryList({"GE-Proton*"}, QDir::Dirs, QDir::Name | QDir::Reversed);
+        for (const auto &entry : entries) {
+            QString wine64 = umuDir.absoluteFilePath(entry) + "/files/bin/wine64";
+            if (QFile::exists(wine64)) return wine64;
+        }
+    }
+
+    // Fall back to system wine
+    QString wine64 = QStandardPaths::findExecutable("wine64");
+    if (!wine64.isEmpty()) return wine64;
+    return QStandardPaths::findExecutable("wine");
+}
+
 void ProcessManager::launchSidecars(const QString &accountId, const QString &winePrefix)
 {
     auto acct = m_accounts->account(accountId);
     if (acct.sidecars.isEmpty()) return;
 
-    QString umuBin = QStandardPaths::findExecutable("umu-run");
-    if (umuBin.isEmpty()) umuBin = "umu-run";
+    QString wineBin = findWineBinary();
+    if (wineBin.isEmpty()) {
+        emit instanceOutput(accountId, "Sidecar: cannot find Wine binary, sidecars skipped.\n");
+        return;
+    }
 
     for (const auto &sidecar : acct.sidecars) {
         QString linuxPath = windowsToLinuxPath(sidecar.exePath, winePrefix);
@@ -833,9 +850,6 @@ void ProcessManager::launchSidecars(const QString &accountId, const QString &win
 
         QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
         env.insert("WINEPREFIX", winePrefix);
-        env.insert("PROTONPATH", m_protonPath.isEmpty() ? QStringLiteral("GE-Proton") : m_protonPath);
-        env.insert("GAMEID", "umu-1284210");
-        env.insert("STORE", "none");
         for (auto it = acct.envVars.constBegin(); it != acct.envVars.constEnd(); ++it)
             env.insert(it.key(), it.value());
 
@@ -860,7 +874,7 @@ void ProcessManager::launchSidecars(const QString &accountId, const QString &win
 
         QStringList args;
         args << linuxPath << sidecar.args;
-        proc->start(umuBin, args);
+        proc->start(wineBin, args);
 
         if (!proc->waitForStarted(5000)) {
             emit instanceOutput(accountId,

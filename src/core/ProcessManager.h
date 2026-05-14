@@ -113,6 +113,7 @@ private:
     void launchSidecars(const QString &accountId, const QString &winePrefix);
     void killSidecars(const QString &accountId);
     QString windowsToLinuxPath(const QString &winPath, const QString &winePrefix) const;
+    QString findWineBinary() const;
 };
 
 #endif // PROCESSMANAGER_H
