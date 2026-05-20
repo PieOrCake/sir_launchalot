@@ -42,7 +42,8 @@ fi
 if [ "$SKIP_BUILD" = false ]; then
     # Build the project
     echo "Building project..."
-    cmake -B "$BUILD_DIR" -S "$PROJECT_DIR" -DCMAKE_BUILD_TYPE=Release
+    cmake -B "$BUILD_DIR" -S "$PROJECT_DIR" -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CXX_FLAGS="-march=x86-64-v2" -DCMAKE_C_FLAGS="-march=x86-64-v2"
     cmake --build "$BUILD_DIR" --parallel "$(nproc)"
 fi
 

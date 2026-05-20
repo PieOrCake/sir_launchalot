@@ -14,6 +14,7 @@
 #include <QTextStream>
 #include <QTimer>
 #include <QPointer>
+#include <QSet>
 #include <QGuiApplication>
 #include <QIcon>
 #include <QImage>
@@ -825,8 +826,89 @@ QString ProcessManager::windowsToLinuxPath(const QString &winPath, const QString
     return path;
 }
 
+bool ProcessManager::isGw2RunningUnder(qint64 rootPid) const
+{
+    QDir proc("/proc");
+    QMap<qint64, qint64> ppidMap;
+    QMap<qint64, QString> commMap;
+
+    for (const auto &entry : proc.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        bool ok;
+        qint64 pid = entry.toLongLong(&ok);
+        if (!ok) continue;
+
+        QFile statFile("/proc/" + entry + "/stat");
+        if (statFile.open(QIODevice::ReadOnly)) {
+            QByteArray data = statFile.readAll();
+            int closeParen = data.lastIndexOf(')');
+            if (closeParen >= 0) {
+                QList<QByteArray> parts = data.mid(closeParen + 2).split(' ');
+                if (parts.size() >= 2) {
+                    qint64 ppid = parts[1].toLongLong(&ok);
+                    if (ok) ppidMap[pid] = ppid;
+                }
+            }
+        }
+
+        QFile commFile("/proc/" + entry + "/comm");
+        if (commFile.open(QIODevice::ReadOnly))
+            commMap[pid] = QString::fromUtf8(commFile.readAll()).trimmed();
+    }
+
+    // Build children map and BFS from rootPid
+    QMap<qint64, QList<qint64>> children;
+    for (auto it = ppidMap.constBegin(); it != ppidMap.constEnd(); ++it)
+        children[it.value()].append(it.key());
+
+    QSet<qint64> visited;
+    QList<qint64> queue = {rootPid};
+    while (!queue.isEmpty()) {
+        qint64 pid = queue.takeFirst();
+        if (visited.contains(pid)) continue;
+        visited.insert(pid);
+        if (commMap.value(pid) == QLatin1String("Gw2-64.exe")) return true;
+        for (qint64 child : children.value(pid))
+            queue.append(child);
+    }
+    return false;
+}
+
+void ProcessManager::startGw2WatchTimer(const QString &accountId, qint64 rootPid)
+{
+    stopGw2WatchTimer(accountId);
+    auto *timer = new QTimer(this);
+    timer->setInterval(5000);
+    connect(timer, &QTimer::timeout, this, [this, accountId, rootPid]() {
+        if (!m_instances.contains(accountId) ||
+            m_instances[accountId].state != InstanceState::Running ||
+            !m_sidecars.contains(accountId) ||
+            m_sidecars[accountId].isEmpty()) {
+            stopGw2WatchTimer(accountId);
+            return;
+        }
+        if (!isGw2RunningUnder(rootPid)) {
+            emit instanceOutput(accountId,
+                "GW2 exited — stopping sidecars to release container.\n");
+            stopGw2WatchTimer(accountId);
+            killSidecars(accountId);
+        }
+    });
+    m_gw2WatchTimers[accountId] = timer;
+    timer->start();
+}
+
+void ProcessManager::stopGw2WatchTimer(const QString &accountId)
+{
+    if (m_gw2WatchTimers.contains(accountId)) {
+        auto *timer = m_gw2WatchTimers.take(accountId);
+        timer->stop();
+        timer->deleteLater();
+    }
+}
+
 void ProcessManager::killSidecars(const QString &accountId)
 {
+    stopGw2WatchTimer(accountId);
     if (!m_sidecars.contains(accountId)) return;
     const QList<QProcess*> procs = m_sidecars.take(accountId);
     for (auto *proc : procs) {
@@ -946,6 +1028,13 @@ void ProcessManager::launchSidecars(const QString &accountId, const QString &win
             QString("Sidecar '%1' started (PID %2).\n")
                 .arg(scName).arg(proc->processId()));
     }
+
+    // Watch for GW2 exiting before umu-run does (e.g. closing the launcher before
+    // logging in). Sidecars inside the pressure-vessel container keep it alive,
+    // preventing umu-run from exiting naturally. When GW2 is gone, kill sidecars
+    // so the container closes and umu-run can exit normally.
+    if (m_instances.contains(accountId) && !m_sidecars.value(accountId).isEmpty())
+        startGw2WatchTimer(accountId, m_instances[accountId].pid);
 }
 
 void ProcessManager::installDesktopEntry(const QString &accountId,

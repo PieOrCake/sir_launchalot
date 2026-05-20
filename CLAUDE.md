@@ -6,8 +6,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 When the user says "discuss" or "suggest", respond with conversation only — do not write or modify code.
 
-Never add "Co-Authored-By" trailers to commits or release notes.
-
 ## What This Is
 
 Sir Launchalot is a C++17/Qt6 GUI application for running multiple Guild Wars 2 accounts simultaneously (multiboxing) on Linux. It auto-detects GW2 installations from Lutris, Heroic, Faugus, and Steam; clones Wine prefixes per alt account (sharing the large `Gw2.dat` via symlink); and launches accounts via `umu-launcher` with Proton.

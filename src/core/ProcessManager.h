@@ -110,10 +110,14 @@ private:
 
     QMap<QString, QList<QProcess*>> m_sidecars;
     QMap<QString, QString> m_sidecarPendingPrefix;  // waiting for pressure-vessel bus name
+    QMap<QString, QTimer*> m_gw2WatchTimers;        // per-account GW2 exit watcher
 
     void launchSidecars(const QString &accountId, const QString &winePrefix,
                         const QString &pvBusName);
     void killSidecars(const QString &accountId);
+    void startGw2WatchTimer(const QString &accountId, qint64 rootPid);
+    void stopGw2WatchTimer(const QString &accountId);
+    bool isGw2RunningUnder(qint64 rootPid) const;
     QString windowsToLinuxPath(const QString &winPath, const QString &winePrefix) const;
     QString findWineBinary() const;
     QString findLaunchClient() const;
