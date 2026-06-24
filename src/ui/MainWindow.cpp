@@ -79,6 +79,12 @@ MainWindow::MainWindow(bool devMode, QWidget *parent)
             this, &MainWindow::onInstanceError);
     connect(m_processManager, &ProcessManager::instanceOutput,
             this, &MainWindow::onInstanceOutput);
+    connect(m_processManager, &ProcessManager::launchBlocked,
+            this, [this](const QString &accountId, const QString &title,
+                         const QString &message) {
+                appendLog(QString("BLOCKED [%1]: %2").arg(accountId, message));
+                QMessageBox::critical(this, title, message);
+            });
     connect(m_processManager, &ProcessManager::setupComplete,
             this, &MainWindow::onSetupComplete);
     connect(m_processManager, &ProcessManager::patchDetected,

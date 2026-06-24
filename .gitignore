@@ -3,3 +3,4 @@ build/
 CMakeUserPresets.json
 .cache/
 handover.md
+plans/

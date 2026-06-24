@@ -66,6 +66,10 @@ signals:
     void updateComplete(const QString &accountId, bool success);
     void allUpdatesComplete();
     void patchDetected();
+    // Emitted when a launch can't proceed because no installed Proton has a
+    // usable Steam runtime. Carries a title + message for a blocking dialog.
+    void launchBlocked(const QString &accountId, const QString &title,
+                       const QString &message);
 
 private slots:
     void onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus);
@@ -76,7 +80,12 @@ private:
                                  const QString &accountId) const;
     QString writeUmuScript(const QString &accountId, const QString &winePrefix,
                             const QString &exePath, const QStringList &extraArgs,
-                            const QString &gameid, bool useSetsid = true) const;
+                            const QString &gameid, const QString &protonPath,
+                            bool useSetsid = true) const;
+    // Resolves the PROTONPATH to hand umu for this launch. Explicit user choice
+    // is honoured; otherwise the best installed Proton with a present runtime is
+    // chosen. Returns empty (and emits launchBlocked) when nothing is usable.
+    QString effectiveProtonPath(const QString &accountId);
     static QString uniqueAppId(const QString &accountId);
     void installDesktopEntry(const QString &accountId, const QString &displayName,
                               const QString &appId, const QString &badgeLabel);

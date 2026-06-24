@@ -17,6 +17,7 @@ set(CORE_SOURCES
     src/core/WineManager.cpp
     src/core/InstallDetector.cpp
     src/core/ProcessManager.cpp
+    src/core/ProtonResolver.cpp
     src/core/Gw2ApiClient.cpp
     src/core/UpdateChecker.cpp
 )
@@ -27,6 +28,7 @@ set(CORE_HEADERS
     src/core/WineManager.h
     src/core/InstallDetector.h
     src/core/ProcessManager.h
+    src/core/ProtonResolver.h
     src/core/Gw2ApiClient.h
     src/core/UpdateChecker.h
 )

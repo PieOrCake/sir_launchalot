@@ -2,6 +2,7 @@
 #include "core/OverlayManager.h"
 #include "core/AccountManager.h"
 #include "core/WineManager.h"
+#include "core/ProtonResolver.h"
 
 #include <QDir>
 #include <QRegularExpression>
@@ -95,8 +96,11 @@ bool ProcessManager::launchAccount(const QString &accountId,
         QStringList mainArgs;
         mainArgs.append(acct.extraArgs);
 
+        const QString proton = effectiveProtonPath(accountId);
+        if (proton.isEmpty()) return false;  // blocked — dialog already requested
+
         QString scriptPath = writeUmuScript(accountId, basePrefix, exePath,
-                                             mainArgs, gameid, false);
+                                             mainArgs, gameid, proton, false);
         if (scriptPath.isEmpty()) {
             emit instanceError(accountId, "Failed to create launch script");
             return false;
@@ -333,8 +337,11 @@ bool ProcessManager::launchAccount(const QString &accountId,
     ensureGw2Icon(exePath);
     installDesktopEntry(accountId, displayName, appId, badge);
 
+    const QString proton = effectiveProtonPath(accountId);
+    if (proton.isEmpty()) return false;  // blocked — dialog already requested
+
     QString scriptPath = writeUmuScript(accountId, winePrefix, effectiveExePath,
-                                         gameArgs, gameid, true);
+                                         gameArgs, gameid, proton, true);
     if (scriptPath.isEmpty()) {
         emit instanceError(accountId, "Failed to create launch script");
         return false;
@@ -509,8 +516,15 @@ bool ProcessManager::setupAccount(const QString &accountId)
     m_localDatBackupPath = backupPath;
 
     // Launch via umu-run in base prefix
+    const QString proton = effectiveProtonPath(accountId);
+    if (proton.isEmpty()) {  // blocked — dialog already requested
+        QFile::remove(localDatPath);
+        QFile::rename(backupPath, localDatPath);
+        m_setupAccountId.clear();
+        return false;
+    }
     QString scriptPath = writeUmuScript(accountId, basePrefix, gw2ExePath,
-                                         {}, "umu-1284210", false);
+                                         {}, "umu-1284210", proton, false);
     if (scriptPath.isEmpty()) {
         QFile::remove(localDatPath);
         QFile::rename(backupPath, localDatPath);
@@ -633,8 +647,15 @@ bool ProcessManager::updateAlt(const QString &accountId, const QString &basePref
     m_updateSavedDir = savedDir;
 
     // Launch via umu-run with -image flag in base prefix
+    const QString proton = effectiveProtonPath(accountId);
+    if (proton.isEmpty()) {  // blocked — dialog already requested
+        QFile::remove(localDatPath);
+        QFile::rename(backupPath, localDatPath);
+        m_updateAccountId.clear();
+        return false;
+    }
     QString scriptPath = writeUmuScript(accountId, basePrefix, exePath,
-                                         {"-image"}, "umu-1284210", false);
+                                         {"-image"}, "umu-1284210", proton, false);
     if (scriptPath.isEmpty()) {
         QFile::remove(localDatPath);
         QFile::rename(backupPath, localDatPath);
@@ -746,9 +767,33 @@ QProcessEnvironment ProcessManager::buildEnvironment(const QString &accountId,
     return QProcessEnvironment();  // unused — umu-run handles all env setup
 }
 
+QString ProcessManager::effectiveProtonPath(const QString &accountId)
+{
+    // An explicit user choice is always honoured as-is.
+    if (!m_protonPath.isEmpty() && m_protonPath != QStringLiteral("GE-Proton"))
+        return m_protonPath;
+
+    // "Auto": pick the newest installed Proton whose Steam runtime is present.
+    const ProtonResolver::Result res = ProtonResolver::forHost().resolve();
+    switch (res.status) {
+    case ProtonResolver::Status::Resolved:
+        emit instanceOutput(accountId, res.logMessage + "\n");
+        return res.protonPath;
+    case ProtonResolver::Status::NoProtonInstalled:
+        // No GE-Proton found — keep legacy behaviour and let umu fetch one.
+        emit instanceOutput(accountId, res.logMessage + "\n");
+        return QStringLiteral("GE-Proton");
+    case ProtonResolver::Status::AllRuntimesMissing:
+        emit launchBlocked(accountId, res.blockTitle, res.blockMessage);
+        return QString();  // signal: abort the launch
+    }
+    return QStringLiteral("GE-Proton");
+}
+
 QString ProcessManager::writeUmuScript(const QString &accountId, const QString &winePrefix,
                                         const QString &exePath, const QStringList &extraArgs,
-                                        const QString &gameid, bool useSetsid) const
+                                        const QString &gameid, const QString &protonPath,
+                                        bool useSetsid) const
 {
     QString scriptPath = QDir::tempPath() + "/sir-launchalot-" + accountId + ".sh";
     QFile script(scriptPath);
@@ -764,8 +809,8 @@ QString ProcessManager::writeUmuScript(const QString &accountId, const QString &
     escapedPrefix.replace("'", "'\\''");
     out << "export WINEPREFIX='" << escapedPrefix << "'\n";
 
-    // PROTONPATH — use configured path or default to GE-Proton (auto-download)
-    QString proton = m_protonPath.isEmpty() ? "GE-Proton" : m_protonPath;
+    // PROTONPATH — resolved by the caller (smart auto-select or explicit path)
+    QString proton = protonPath.isEmpty() ? "GE-Proton" : protonPath;
     QString escapedProton = proton;
     escapedProton.replace("'", "'\\''");
     out << "export PROTONPATH='" << escapedProton << "'\n";
