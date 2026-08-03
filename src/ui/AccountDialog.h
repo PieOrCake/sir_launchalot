@@ -29,6 +29,7 @@ private:
     QString m_accountId;
     QString m_basePrefix;
     QLineEdit *m_nameEdit;
+    QLineEdit *m_argsEdit;
     QCheckBox *m_mainCheck;
     QCheckBox *m_enableAddonsCheck;
     QLineEdit *m_launchCommandEdit;

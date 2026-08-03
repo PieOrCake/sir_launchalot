@@ -790,7 +790,7 @@ void MainWindow::onEditAccount()
         updated.password = acct.password;
         updated.localDatPath = acct.localDatPath;
         updated.gfxSettingsPath = acct.gfxSettingsPath;
-        updated.extraArgs = acct.extraArgs;
+        // extraArgs is managed by the dialog now
         updated.envVars = acct.envVars;
         // isSteam and launchCommand are managed by the dialog
         if (m_accountManager->updateAccount(updated)) {

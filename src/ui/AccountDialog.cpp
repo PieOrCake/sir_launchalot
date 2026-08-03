@@ -8,6 +8,7 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
+#include <QProcess>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QTableWidget>
@@ -98,6 +99,11 @@ void AccountDialog::setupUi()
     m_nameEdit->setPlaceholderText("e.g. Alt1, PvP Account, Crafter");
     m_nameEdit->setMinimumWidth(250);
     form->addRow("Name:", m_nameEdit);
+
+    m_argsEdit = new QLineEdit;
+    m_argsEdit->setPlaceholderText("e.g. -shareArchive -maploadinfo");
+    m_argsEdit->setToolTip("Extra command-line arguments passed to Gw2-64.exe");
+    form->addRow("Extra arguments:", m_argsEdit);
     layout->addLayout(form);
 
     m_mainCheck = new QCheckBox;
@@ -218,6 +224,7 @@ void AccountDialog::setAccount(const AccountManager::Account &account)
     setWindowTitle("Edit Account");
 
     m_nameEdit->setText(account.displayName);
+    m_argsEdit->setText(account.extraArgs.join(' '));
 
     m_mainCheck->setChecked(account.isMain);
 
@@ -251,6 +258,7 @@ AccountManager::Account AccountDialog::account() const
     acct.id = m_editMode ? m_accountId
                          : QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
     acct.displayName = m_nameEdit->text().trimmed();
+    acct.extraArgs = QProcess::splitCommand(m_argsEdit->text());
     acct.isMain = m_mainCheck->isChecked();
     acct.isSteam = m_steamMode;
     acct.launchCommand = m_launchCommandEdit->text().trimmed();
