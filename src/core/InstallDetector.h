@@ -32,6 +32,7 @@ public:
 
     static QString gw2ExeInPrefix(const QString &winePrefix);
     static QString deriveProtonPath(const QString &wineBinary);
+    static QString faugusProtonPath(const QString &prefixPath, const QString &runnerName);
 
 signals:
     void gw2Found(const DetectedInstall &game);

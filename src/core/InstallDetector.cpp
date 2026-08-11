@@ -2,6 +2,8 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
@@ -295,50 +297,149 @@ QList<InstallDetector::DetectedInstall> InstallDetector::scanHeroicConfigs() con
     return results;
 }
 
+QString InstallDetector::faugusProtonPath(const QString &prefixPath, const QString &runnerName)
+{
+    // Faugus writes a config_info file into each prefix. Line 1 is the runner's
+    // version string; the lines after it are paths inside the runner directory
+    // (e.g. ".../compatibilitytools.d/Proton-GE Latest/files/share/fonts/").
+    QFile ci(prefixPath + "/config_info");
+    if (ci.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QTextStream in(&ci);
+        while (!in.atEnd()) {
+            QString line = in.readLine().trimmed();
+            int idx = line.indexOf("/files/");
+            if (idx <= 0) continue;
+            QString protonDir = line.left(idx);
+            if (QDir(protonDir).exists()) {
+                ci.close();
+                return protonDir;
+            }
+        }
+        ci.close();
+    }
+
+    // Fallback: the runner name recorded in games.json names a directory in one
+    // of the Steam compatibilitytools.d locations.
+    if (!runnerName.isEmpty()) {
+        const QStringList toolDirs = {
+            QDir::homePath() + "/.local/share/Steam/compatibilitytools.d",
+            QDir::homePath() + "/.steam/steam/compatibilitytools.d",
+            QDir::homePath() + "/.var/app/com.valvesoftware.Steam/.local/share/Steam/compatibilitytools.d"
+        };
+        for (const auto &toolDir : toolDirs) {
+            QString candidate = toolDir + "/" + runnerName;
+            if (QDir(candidate).exists()) return candidate;
+        }
+    }
+
+    // Unknown runner — leave empty so the launcher resolves a Proton itself.
+    return QString();
+}
+
 QList<InstallDetector::DetectedInstall> InstallDetector::scanFaugusConfigs() const
 {
     QList<DetectedInstall> results;
+    QSet<QString> seenPrefixes;
 
-    // Faugus stores prefixes in a configurable location.
-    // Check default locations: native and Flatpak
-    QStringList faugusPrefixDirs = {
-        QDir::homePath() + "/.config/faugus-launcher/prefixes",
-        QDir::homePath() + "/Faugus",
-        QDir::homePath() + "/.var/app/io.github.Faugus.faugus-launcher/config/faugus-launcher/prefixes"
+    const QString home = QDir::homePath();
+
+    // Faugus records its games in games.json and its settings in config.json.
+    // Current versions keep games.json under the data dir; older ones used the
+    // config dir. Both native and Flatpak layouts are checked.
+    const QStringList faugusDirs = {
+        home + "/.local/share/faugus-launcher",
+        home + "/.var/app/io.github.Faugus.faugus-launcher/data/faugus-launcher",
+        home + "/.config/faugus-launcher",
+        home + "/.var/app/io.github.Faugus.faugus-launcher/config/faugus-launcher"
     };
 
-    QSet<QString> seenPrefixes;
-    for (const auto &prefixParent : faugusPrefixDirs) {
+    // Registers a candidate prefix; does nothing unless GW2 is actually there.
+    auto addCandidate = [&](const QString &rawPrefix, const QString &exeHint, const QString &runnerName) {
+        if (rawPrefix.isEmpty()) return;
+
+        // Some Faugus prefixes nest the real prefix in a pfx/ subdirectory;
+        // others just symlink pfx back to the prefix root.
+        QString prefix = rawPrefix;
+        if (QDir(rawPrefix + "/pfx/drive_c").exists() &&
+            QFileInfo(rawPrefix + "/pfx").canonicalFilePath() != QFileInfo(rawPrefix).canonicalFilePath()) {
+            prefix = rawPrefix + "/pfx";
+        }
+
+        QString canonical = QFileInfo(prefix).canonicalFilePath();
+        if (canonical.isEmpty() || seenPrefixes.contains(canonical)) return;
+
+        // Faugus keeps the game files outside the prefix, so trust the path it
+        // recorded first and only fall back to searching inside the prefix.
+        QString gw2Exe;
+        if (!exeHint.isEmpty() && QFile::exists(exeHint)) {
+            const QString base = QFileInfo(exeHint).fileName();
+            if (base.compare("Gw2-64.exe", Qt::CaseInsensitive) == 0 ||
+                base.compare("Gw2.exe", Qt::CaseInsensitive) == 0) {
+                gw2Exe = exeHint;
+            }
+        }
+        if (gw2Exe.isEmpty()) gw2Exe = gw2ExeInPrefix(prefix);
+        if (gw2Exe.isEmpty() && prefix != rawPrefix) gw2Exe = gw2ExeInPrefix(rawPrefix);
+        if (gw2Exe.isEmpty()) return;
+
+        seenPrefixes.insert(canonical);
+
+        DetectedInstall game;
+        game.name = "Guild Wars 2 (Faugus)";
+        game.source = "faugus";
+        game.winePrefix = prefix;
+        game.exePath = gw2Exe;
+        game.protonPath = faugusProtonPath(rawPrefix, runnerName);
+        results.append(game);
+    };
+
+    // Primary source: the game list Faugus maintains.
+    for (const auto &faugusDir : faugusDirs) {
+        QFile gamesFile(faugusDir + "/games.json");
+        if (!gamesFile.open(QIODevice::ReadOnly)) continue;
+
+        QJsonParseError parseError;
+        const QJsonDocument doc = QJsonDocument::fromJson(gamesFile.readAll(), &parseError);
+        gamesFile.close();
+        if (parseError.error != QJsonParseError::NoError || !doc.isArray()) continue;
+
+        for (const auto &value : doc.array()) {
+            const QJsonObject entry = value.toObject();
+            addCandidate(entry.value("prefix").toString().trimmed(),
+                         entry.value("path").toString().trimmed(),
+                         entry.value("runner").toString().trimmed());
+        }
+    }
+
+    // Fallback: scan the prefix directories directly, for installs Faugus has
+    // not recorded or when games.json cannot be read.
+    QStringList prefixParents = {
+        home + "/Faugus",
+        home + "/.config/faugus-launcher/prefixes",
+        home + "/.var/app/io.github.Faugus.faugus-launcher/config/faugus-launcher/prefixes"
+    };
+
+    // Honour a relocated prefix directory.
+    for (const auto &faugusDir : faugusDirs) {
+        QFile configFile(faugusDir + "/config.json");
+        if (!configFile.open(QIODevice::ReadOnly)) continue;
+        const QJsonDocument doc = QJsonDocument::fromJson(configFile.readAll());
+        configFile.close();
+        if (!doc.isObject()) continue;
+
+        QString defaultPrefix = doc.object().value("default-prefix").toString().trimmed();
+        if (!defaultPrefix.isEmpty() && !prefixParents.contains(defaultPrefix)) {
+            prefixParents.append(defaultPrefix);
+        }
+    }
+
+    for (const auto &prefixParent : prefixParents) {
         QDir parentDir(prefixParent);
         if (!parentDir.exists()) continue;
 
         // Each subdirectory is a game prefix
         for (const auto &entry : parentDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
-            QString prefixPath = parentDir.absoluteFilePath(entry);
-
-            // Some Faugus prefixes use Proton-style pfx/ subdir
-            QString effectivePrefix = prefixPath;
-            if (QDir(prefixPath + "/pfx/drive_c").exists()) {
-                effectivePrefix = prefixPath + "/pfx";
-            }
-
-            QString canonical = QFileInfo(effectivePrefix).canonicalFilePath();
-            if (canonical.isEmpty() || seenPrefixes.contains(canonical)) continue;
-
-            QString gw2Exe = gw2ExeInPrefix(effectivePrefix);
-            if (gw2Exe.isEmpty()) gw2Exe = gw2ExeInPrefix(prefixPath);
-            if (gw2Exe.isEmpty()) continue;
-
-            seenPrefixes.insert(canonical);
-
-            DetectedInstall game;
-            game.name = "Guild Wars 2 (Faugus)";
-            game.source = "faugus";
-            game.winePrefix = effectivePrefix;
-            game.exePath = gw2Exe;
-            // Faugus uses runners from Steam compatibilitytools.d — can't determine which
-            // without parsing its internal config. Default to GE-Proton (protonPath empty).
-            results.append(game);
+            addCandidate(parentDir.absoluteFilePath(entry), QString(), QString());
         }
     }
 
