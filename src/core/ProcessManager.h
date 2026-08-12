@@ -86,6 +86,15 @@ private:
     // is honoured; otherwise the best installed Proton with a present runtime is
     // chosen. Returns empty (and emits launchBlocked) when nothing is usable.
     QString effectiveProtonPath(const QString &accountId);
+    // Deletes addon framework files (Nexus/arcdps/ReShade) from a game directory
+    // that the alt owns privately. Never called on a shared install.
+    void stripAddons(const QString &accountId, const QString &gameDir);
+    // Points destGameDir/Gw2.dat at the real one so alts share the ~80 GB archive.
+    void linkGw2Dat(const QString &accountId, const QString &sourceGameDir,
+                    const QString &destGameDir);
+    // Builds (or refreshes) an addon-free copy of the game folder for an alt whose
+    // install lives outside the Wine prefix. Returns the path, or empty on failure.
+    QString prepareStrippedGameDir(const QString &accountId, const QString &sourceGameDir);
     static QString uniqueAppId(const QString &accountId);
     void installDesktopEntry(const QString &accountId, const QString &displayName,
                               const QString &appId, const QString &badgeLabel);

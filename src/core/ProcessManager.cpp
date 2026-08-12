@@ -36,7 +36,16 @@ static QString fileInfo(const QString &path) {
     return QString("%1 bytes, md5=%2").arg(fi.size()).arg(fileMd5(path));
 }
 
-
+// Files and directories that belong to addon frameworks (Nexus, arcdps, ReShade)
+// rather than to the game itself. Note that bin64/ is deliberately absent — that
+// is ArenaNet's own embedded browser (gem store, trading post), not an addon.
+static const QStringList kAddonFiles = {
+    "d3d11.dll", "d3d9.dll", "dxgi.dll",
+    "ReShade.ini", "GW2-UOAOM.ini", "arcdps.ini"
+};
+static const QStringList kAddonDirs = {
+    "addons", "reshade-shaders"
+};
 
 ProcessManager::ProcessManager(OverlayManager *overlay,
                                AccountManager *accounts,
@@ -76,6 +85,9 @@ bool ProcessManager::launchAccount(const QString &accountId,
 
     auto acct = m_accounts->account(accountId);
     QString winePrefix;
+    // For alts: the folder the game is actually run from. Empty means "use the
+    // shared install as-is". Set by the alt branch below.
+    QString altGameDir;
 
     if (acct.isMain) {
         // Main account launches via umu-run
@@ -186,76 +198,31 @@ bool ProcessManager::launchAccount(const QString &accountId,
         }
         emit instanceOutput(accountId, "Prefix synced.\n");
 
-        // Remove addon files from clone if addons are disabled for this account
-        if (!acct.enableAddons) {
-            QString gameDir = clonePrefix;
-            if (exePath.startsWith(basePrefix)) {
-                QString relExeDir = QFileInfo(exePath.mid(basePrefix.length() + 1)).path();
-                gameDir = clonePrefix + "/" + relExeDir;
-            }
-            emit instanceOutput(accountId, QString("Addon removal — game dir: %1\n").arg(gameDir));
+        // Work out which copy of the game files this alt should run.
+        //
+        // Two install layouts exist. Lutris keeps the game inside the Wine prefix,
+        // so the rsync above already produced a private copy — strip addons from it
+        // and point Gw2.dat back at the base prefix. Faugus, Heroic and Steam keep
+        // the game in a separate folder, so the clone holds no game files at all;
+        // when addons are disabled we build a stripped copy of the game folder in
+        // the account's own data dir, otherwise the shared original is used as-is.
+        const QString sourceGameDir = QFileInfo(exePath).absolutePath();
+        const bool gameInPrefix = exePath.startsWith(basePrefix + "/");
 
-            // List DLL files in game dir for diagnostics
-            QDir gameDirObj(gameDir);
-            QStringList dlls = gameDirObj.entryList({"*.dll"}, QDir::Files);
-            if (!dlls.isEmpty()) {
-                emit instanceOutput(accountId, QString("DLLs in game dir: %1\n").arg(dlls.join(", ")));
+        if (gameInPrefix) {
+            const QString relExeDir = QFileInfo(exePath.mid(basePrefix.length() + 1)).path();
+            const QString cloneGameDir = (relExeDir == ".") ? clonePrefix
+                                                            : clonePrefix + "/" + relExeDir;
+            if (!acct.enableAddons) {
+                stripAddons(accountId, cloneGameDir);
             }
-
-            QStringList addonFiles = {
-                "d3d11.dll", "d3d9.dll", "dxgi.dll",
-                "ReShade.ini", "GW2-UOAOM.ini", "arcdps.ini"
-            };
-            QStringList addonDirs = {
-                "bin64", "addons", "reshade-shaders"
-            };
-            int removed = 0;
-            for (const auto &f : addonFiles) {
-                QString path = gameDir + "/" + f;
-                if (QFile::exists(path)) {
-                    QFile::remove(path);
-                    emit instanceOutput(accountId, QString("  Removed: %1\n").arg(f));
-                    ++removed;
-                }
-            }
-            for (const auto &d : addonDirs) {
-                QString path = gameDir + "/" + d;
-                if (QDir(path).exists()) {
-                    QDir(path).removeRecursively();
-                    emit instanceOutput(accountId, QString("  Removed dir: %1/\n").arg(d));
-                    ++removed;
-                }
-            }
-            if (removed > 0) {
-                emit instanceOutput(accountId,
-                    QString("Addons disabled — removed %1 addon file(s)/dir(s) from clone.\n").arg(removed));
-            } else {
-                emit instanceOutput(accountId, "Addons disabled — no addon files found to remove.\n");
-            }
-
-            // Verify deletion
-            QStringList remaining = gameDirObj.entryList({"*.dll"}, QDir::Files);
-            if (!remaining.isEmpty()) {
-                emit instanceOutput(accountId, QString("Remaining DLLs: %1\n").arg(remaining.join(", ")));
-            }
-        }
-
-        // Symlink Gw2.dat from base prefix so alts share main's updated game data.
-        // This avoids each alt needing its own ~50GB copy and ensures patches
-        // applied to main automatically propagate to all alts.
-        if (exePath.startsWith(basePrefix)) {
-            QString relExeDir = QFileInfo(exePath.mid(basePrefix.length() + 1)).path();
-            QString baseGw2Dat = basePrefix + "/" + relExeDir + "/Gw2.dat";
-            QString cloneGw2Dat = clonePrefix + "/" + relExeDir + "/Gw2.dat";
-            if (QFile::exists(baseGw2Dat)) {
-                QFileInfo cloneInfo(cloneGw2Dat);
-                // Remove existing file or stale symlink
-                if (cloneInfo.exists() || cloneInfo.isSymLink()) {
-                    QFile::remove(cloneGw2Dat);
-                }
-                QFile::link(baseGw2Dat, cloneGw2Dat);
-                emit instanceOutput(accountId, QString("Symlinked Gw2.dat -> %1\n").arg(baseGw2Dat));
-            }
+            // Symlink Gw2.dat from the base prefix so alts share main's updated
+            // game data instead of each needing their own ~80 GB copy.
+            linkGw2Dat(accountId, sourceGameDir, cloneGameDir);
+            altGameDir = cloneGameDir;
+        } else if (!acct.enableAddons) {
+            altGameDir = prepareStrippedGameDir(accountId, sourceGameDir);
+            if (altGameDir.isEmpty()) return false;
         }
 
         // Find the GW2 user data dir in the clone
@@ -311,12 +278,11 @@ bool ProcessManager::launchAccount(const QString &accountId,
         emit instanceOutput(accountId, "=== END Alt account launch ===\n");
     }
 
-    // For alt accounts, remap exe path to the clone prefix so Wine/umu-run loads
-    // DLLs from the clone directory (where addon files may have been removed)
+    // For alt accounts, run the exe out of the account's own game dir so Wine
+    // loads its DLLs from there (that is where addon files have been stripped).
     QString effectiveExePath = exePath;
-    if (!acct.isMain && exePath.startsWith(basePrefix)) {
-        QString relPath = exePath.mid(basePrefix.length());  // e.g. /drive_c/.../Gw2-64.exe
-        effectiveExePath = winePrefix + relPath;
+    if (!acct.isMain && !altGameDir.isEmpty()) {
+        effectiveExePath = altGameDir + "/" + QFileInfo(exePath).fileName();
     }
 
     // Build args: -shareArchive for alts, -autologin if saved Local.dat exists
@@ -788,6 +754,112 @@ QString ProcessManager::effectiveProtonPath(const QString &accountId)
         return QString();  // signal: abort the launch
     }
     return QStringLiteral("GE-Proton");
+}
+
+void ProcessManager::stripAddons(const QString &accountId, const QString &gameDir)
+{
+    emit instanceOutput(accountId, QString("Addon removal — game dir: %1\n").arg(gameDir));
+
+    QDir gameDirObj(gameDir);
+    QStringList dlls = gameDirObj.entryList({"*.dll"}, QDir::Files);
+    if (!dlls.isEmpty()) {
+        emit instanceOutput(accountId, QString("DLLs in game dir: %1\n").arg(dlls.join(", ")));
+    }
+
+    int removed = 0;
+    for (const auto &f : kAddonFiles) {
+        QString path = gameDir + "/" + f;
+        if (QFile::exists(path)) {
+            QFile::remove(path);
+            emit instanceOutput(accountId, QString("  Removed: %1\n").arg(f));
+            ++removed;
+        }
+    }
+    for (const auto &d : kAddonDirs) {
+        QString path = gameDir + "/" + d;
+        if (QDir(path).exists()) {
+            QDir(path).removeRecursively();
+            emit instanceOutput(accountId, QString("  Removed dir: %1/\n").arg(d));
+            ++removed;
+        }
+    }
+    if (removed > 0) {
+        emit instanceOutput(accountId,
+            QString("Addons disabled — removed %1 addon file(s)/dir(s).\n").arg(removed));
+    } else {
+        emit instanceOutput(accountId, "Addons disabled — no addon files found to remove.\n");
+    }
+
+    QStringList remaining = QDir(gameDir).entryList({"*.dll"}, QDir::Files);
+    if (!remaining.isEmpty()) {
+        emit instanceOutput(accountId, QString("Remaining DLLs: %1\n").arg(remaining.join(", ")));
+    }
+}
+
+void ProcessManager::linkGw2Dat(const QString &accountId, const QString &sourceGameDir,
+                                 const QString &destGameDir)
+{
+    if (sourceGameDir == destGameDir) return;
+
+    const QString src = sourceGameDir + "/Gw2.dat";
+    const QString dest = destGameDir + "/Gw2.dat";
+    if (!QFile::exists(src)) return;
+
+    QFileInfo destInfo(dest);
+    if (destInfo.isSymLink() && destInfo.symLinkTarget() == src) return;  // already correct
+    if (destInfo.exists() || destInfo.isSymLink()) {
+        QFile::remove(dest);
+    }
+    if (QFile::link(src, dest)) {
+        emit instanceOutput(accountId, QString("Symlinked Gw2.dat -> %1\n").arg(src));
+    } else {
+        emit instanceError(accountId, "Failed to symlink Gw2.dat into " + destGameDir);
+    }
+}
+
+QString ProcessManager::prepareStrippedGameDir(const QString &accountId,
+                                                const QString &sourceGameDir)
+{
+    const QString destDir = m_overlay->dataDir() + "/" + accountId + "/game";
+    if (!QDir().mkpath(destDir)) {
+        emit instanceError(accountId, "Could not create addon-free game dir: " + destDir);
+        return {};
+    }
+
+    emit instanceOutput(accountId,
+        QString("Addons disabled — building addon-free game dir at %1 ...\n").arg(destDir));
+
+    // Excluded paths are anchored to the transfer root so a same-named file
+    // deeper in the tree is left alone. rsync also protects excluded paths from
+    // --delete, which is what keeps the Gw2.dat symlink and the alt's own logs.
+    QStringList args = {
+        "-a", "--delete",
+        "--exclude", "/Gw2.dat",
+        "--exclude", "/Gw2.tmp",
+        "--exclude", "/Gw2-64.tmp",
+        "--exclude", "/debug.log",
+        "--exclude", "/Crash.dmp"
+    };
+    for (const auto &f : kAddonFiles) args << "--exclude" << ("/" + f);
+    for (const auto &d : kAddonDirs)  args << "--exclude" << ("/" + d + "/");
+    args << sourceGameDir + "/" << destDir + "/";
+
+    QProcess rsync;
+    rsync.setProcessChannelMode(QProcess::MergedChannels);
+    rsync.start("rsync", args);
+    if (!rsync.waitForFinished(600000)) {
+        emit instanceError(accountId, "rsync timed out building addon-free game dir");
+        return {};
+    }
+    if (rsync.exitCode() != 0) {
+        emit instanceError(accountId,
+            "rsync failed building addon-free game dir: " + QString(rsync.readAll()));
+        return {};
+    }
+
+    linkGw2Dat(accountId, sourceGameDir, destDir);
+    emit instanceOutput(accountId, "Addon-free game dir ready.\n");
+    return destDir;
 }
 
 QString ProcessManager::writeUmuScript(const QString &accountId, const QString &winePrefix,
