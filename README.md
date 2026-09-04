@@ -17,6 +17,7 @@ If an LLM creating software upsets you, then perhaps this repo isn't for you. Mo
 
 - **Multi-launcher detection** — auto-detects GW2 installations from Lutris, Heroic Games Launcher, Faugus Launcher, and Steam
 - **umu-launcher integration** — launches all accounts (main and alts) via `umu-run` with Proton, giving direct process control and reliable exit detection
+- **Multi-account launch** — tick the accounts you play together and launch them all from one button, spaced out by a configurable delay
 - **Automatic credential capture** — Setup Wizard walks you through logging in as each alt
 - **Per-account addon toggle** — enable or disable addons (ArcDPS, Nexus, etc.) per alt
 - **Graphics settings persistence** — each alt remembers its own graphics settings between sessions
@@ -24,7 +25,7 @@ If an LLM creating software upsets you, then perhaps this repo isn't for you. Mo
 - **External app launcher** — launch companion apps (Discord, TeamSpeak, etc.) from the same UI
 - **Sidecar programs** — run extra Windows programs alongside an account, such as the Discord IPC bridge for Rich Presence
 - **Per-account launch arguments** — add your own command-line arguments to any account
-- **GW2 API integration** — display account name and Wizard's Vault daily/weekly progress per account, with auto-refresh
+- **GW2 API integration** — display account name, last seen time, and Wizard's Vault daily/weekly progress per account, with auto-refresh
 - **Instance monitoring** — track running accounts with start/stop controls
 - Runs on any Linux distro via AppImage
 
