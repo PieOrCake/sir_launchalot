@@ -88,6 +88,28 @@ bool AccountManager::checkForUpdatesEnabled() const
     return m_checkForUpdatesEnabled;
 }
 
+void AccountManager::setMultiLaunchDelay(int seconds)
+{
+    m_multiLaunchDelay = qBound(0, seconds, 120);
+    save();
+}
+
+int AccountManager::multiLaunchDelay() const
+{
+    return m_multiLaunchDelay;
+}
+
+void AccountManager::setConfirmMultiLaunch(bool enabled)
+{
+    m_confirmMultiLaunch = enabled;
+    save();
+}
+
+bool AccountManager::confirmMultiLaunch() const
+{
+    return m_confirmMultiLaunch;
+}
+
 QString AccountManager::configFilePath() const
 {
     return m_configDir + "/accounts.json";
@@ -148,6 +170,8 @@ bool AccountManager::load()
     m_protonPath = root.value("protonPath").toString();
     m_apiRefreshInterval = root.value("apiRefreshInterval").toInt(15);
     m_checkForUpdatesEnabled = root.value("checkForUpdates").toBool(true);
+    m_multiLaunchDelay = qBound(0, root.value("multiLaunchDelay").toInt(5), 120);
+    m_confirmMultiLaunch = root.value("confirmMultiLaunch").toBool(true);
 
     return true;
 }
@@ -184,6 +208,8 @@ bool AccountManager::save() const
     root["protonPath"] = m_protonPath;
     root["apiRefreshInterval"] = m_apiRefreshInterval;
     root["checkForUpdates"] = m_checkForUpdatesEnabled;
+    root["multiLaunchDelay"] = m_multiLaunchDelay;
+    root["confirmMultiLaunch"] = m_confirmMultiLaunch;
 
     QFile file(configFilePath());
     if (!file.open(QIODevice::WriteOnly)) {
@@ -455,6 +481,8 @@ QJsonObject AccountManager::accountToJson(const Account &account) const
     obj["showAccountName"] = account.showAccountName;
     obj["showDailyVault"] = account.showDailyVault;
     obj["showWeeklyVault"] = account.showWeeklyVault;
+    obj["showLastSeen"] = account.showLastSeen;
+    obj["multiLaunch"] = account.multiLaunch;
 
     return obj;
 }
@@ -499,6 +527,8 @@ AccountManager::Account AccountManager::accountFromJson(const QJsonObject &obj) 
     acct.showAccountName = obj.value("showAccountName").toBool(false);
     acct.showDailyVault = obj.value("showDailyVault").toBool(false);
     acct.showWeeklyVault = obj.value("showWeeklyVault").toBool(false);
+    acct.showLastSeen = obj.value("showLastSeen").toBool(false);
+    acct.multiLaunch = obj.value("multiLaunch").toBool(false);
 
     return acct;
 }

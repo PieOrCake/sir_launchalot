@@ -20,6 +20,7 @@ public:
         QString name;
         int world = 0;
         QString created;
+        QString lastModified;   // ISO-8601, requires schema v2019-02-21
         bool valid = false;
     };
 

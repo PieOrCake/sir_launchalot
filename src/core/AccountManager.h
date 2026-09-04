@@ -44,6 +44,8 @@ public:
         bool showAccountName = false;   // display API account name
         bool showDailyVault = false;    // display daily wizard's vault status
         bool showWeeklyVault = false;   // display weekly wizard's vault status
+        bool showLastSeen = false;      // display API last_modified timestamp
+        bool multiLaunch = false;       // include in the multi-account launch
     };
 
     bool load();
@@ -82,6 +84,10 @@ public:
     int apiRefreshInterval() const;
     void setCheckForUpdatesEnabled(bool enabled);
     bool checkForUpdatesEnabled() const;
+    void setMultiLaunchDelay(int seconds);
+    int multiLaunchDelay() const;
+    void setConfirmMultiLaunch(bool enabled);
+    bool confirmMultiLaunch() const;
 
 signals:
     void accountAdded(const QString &id);
@@ -107,6 +113,8 @@ private:
     QString m_protonPath;
     int m_apiRefreshInterval = 15;
     bool m_checkForUpdatesEnabled = true;
+    int m_multiLaunchDelay = 5;          // seconds between staged launches
+    bool m_confirmMultiLaunch = true;
 };
 
 #endif // ACCOUNTMANAGER_H

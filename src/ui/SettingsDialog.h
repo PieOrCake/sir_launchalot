@@ -6,6 +6,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QSlider>
+#include <QSpinBox>
 
 class SettingsDialog : public QDialog
 {
@@ -26,6 +27,12 @@ public:
     void setCheckForUpdatesEnabled(bool enabled);
     bool checkForUpdatesEnabled() const;
 
+    void setMultiLaunchDelay(int seconds);
+    int multiLaunchDelay() const;
+
+    void setConfirmMultiLaunchEnabled(bool enabled);
+    bool confirmMultiLaunchEnabled() const;
+
 private slots:
     void onBrowsePrefix();
     void onBrowseExe();
@@ -38,6 +45,8 @@ private:
     QSlider *m_apiRefreshSlider;
     QLabel *m_apiRefreshLabel;
     QCheckBox *m_checkUpdatesBox;
+    QSpinBox *m_multiLaunchDelaySpin;
+    QCheckBox *m_confirmMultiLaunchBox;
 };
 
 #endif // SETTINGSDIALOG_H

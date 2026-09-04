@@ -47,6 +47,8 @@ private slots:
     void onRemoveExternalApp(const QString &appId);
     void onLaunchExternalApp(const QString &appId);
     void onUpdateAlts();
+    void onMultiLaunch();
+    void onMultiLaunchMenu(const QPoint &pos);
 
 private:
     void setupUi();
@@ -61,6 +63,15 @@ private:
     void fetchApiData();
     void addSteamAlt();
     void launchSteamAccount(const QString &accountId);
+
+    // Multi-account launch: staged queue driven by a single-shot timer
+    void showMultiLaunchMenu(const QPoint &globalPos);
+    void startMultiLaunchQueue(const QStringList &ids);
+    void processMultiLaunchQueue();
+    void cancelMultiLaunch();
+    void updateMultiLaunchButton();
+    // Empty when the account can launch right now, otherwise a short reason.
+    QString multiLaunchSkipReason(const QString &accountId) const;
 
     // Core managers
     OverlayManager *m_overlayManager;
@@ -79,6 +90,10 @@ private:
     QTextEdit *m_logView;
     QLabel *m_statusLabel;
     QTimer *m_apiRefreshTimer;
+    QPushButton *m_multiLaunchBtn;
+    QTimer *m_multiLaunchTimer;
+    QStringList m_multiLaunchQueue;   // accounts still to launch
+    int m_multiLaunchTotal = 0;       // size of the queue when it started
 
     // State
     QString m_basePrefix;

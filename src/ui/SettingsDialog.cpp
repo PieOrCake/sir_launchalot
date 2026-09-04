@@ -8,6 +8,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QVBoxLayout>
 
 SettingsDialog::SettingsDialog(QWidget *parent)
@@ -15,7 +16,7 @@ SettingsDialog::SettingsDialog(QWidget *parent)
 {
     setupUi();
     setWindowTitle("Settings");
-    resize(500, 300);
+    resize(500, 400);
 }
 
 void SettingsDialog::setupUi()
@@ -66,6 +67,24 @@ void SettingsDialog::setupUi()
     apiForm->addRow("Auto-refresh interval:", sliderLayout);
 
     layout->addWidget(apiGroup);
+
+    // Multi-account launch group
+    auto *multiGroup = new QGroupBox("Multi-Account Launch");
+    auto *multiLayout = new QVBoxLayout(multiGroup);
+
+    auto *multiForm = new QFormLayout;
+    m_multiLaunchDelaySpin = new QSpinBox;
+    m_multiLaunchDelaySpin->setRange(0, 120);
+    m_multiLaunchDelaySpin->setValue(5);
+    m_multiLaunchDelaySpin->setSuffix(" s");
+    m_multiLaunchDelaySpin->setToolTip("Pause between each account when launching several at once");
+    multiForm->addRow("Delay between launches:", m_multiLaunchDelaySpin);
+    multiLayout->addLayout(multiForm);
+
+    m_confirmMultiLaunchBox = new QCheckBox("Confirm multi-account launch");
+    multiLayout->addWidget(m_confirmMultiLaunchBox);
+
+    layout->addWidget(multiGroup);
 
     // Updates group
     auto *updatesGroup = new QGroupBox("Updates");
@@ -139,5 +158,25 @@ void SettingsDialog::setCheckForUpdatesEnabled(bool enabled)
 bool SettingsDialog::checkForUpdatesEnabled() const
 {
     return m_checkUpdatesBox->isChecked();
+}
+
+void SettingsDialog::setMultiLaunchDelay(int seconds)
+{
+    m_multiLaunchDelaySpin->setValue(qBound(0, seconds, 120));
+}
+
+int SettingsDialog::multiLaunchDelay() const
+{
+    return m_multiLaunchDelaySpin->value();
+}
+
+void SettingsDialog::setConfirmMultiLaunchEnabled(bool enabled)
+{
+    m_confirmMultiLaunchBox->setChecked(enabled);
+}
+
+bool SettingsDialog::confirmMultiLaunchEnabled() const
+{
+    return m_confirmMultiLaunchBox->isChecked();
 }
 

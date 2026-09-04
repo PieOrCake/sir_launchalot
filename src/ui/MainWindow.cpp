@@ -28,6 +28,8 @@
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QMessageBox>
+#include <QMouseEvent>
+#include <QAction>
 #include <QDesktopServices>
 #include <QSystemTrayIcon>
 #include <QUrl>
@@ -36,6 +38,53 @@
 #include <QStandardPaths>
 #include <QTextStream>
 #include <QTimer>
+
+// Renders an ISO-8601 timestamp as a short relative string ("3 days ago").
+// Falls back to an absolute local date once the gap exceeds a month.
+// A menu whose checkable entries toggle without dismissing it, so an entire
+// multi-launch selection can be ticked in one pass.
+class KeepOpenMenu : public QMenu
+{
+public:
+    using QMenu::QMenu;
+
+protected:
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        QAction *action = activeAction();
+        if (action && action->isEnabled() && action->isCheckable()) {
+            action->trigger();
+            return;     // swallow the click so the menu stays open
+        }
+        QMenu::mouseReleaseEvent(event);
+    }
+};
+
+static QString relativeTime(const QString &iso)
+{
+    QDateTime when = QDateTime::fromString(iso, Qt::ISODate);
+    if (!when.isValid())
+        return QString();
+
+    qint64 secs = when.secsTo(QDateTime::currentDateTimeUtc());
+    if (secs < 0)
+        return "just now";
+    if (secs < 60)
+        return "just now";
+    if (secs < 3600) {
+        qint64 m = secs / 60;
+        return QString("%1 minute%2 ago").arg(m).arg(m == 1 ? "" : "s");
+    }
+    if (secs < 86400) {
+        qint64 h = secs / 3600;
+        return QString("%1 hour%2 ago").arg(h).arg(h == 1 ? "" : "s");
+    }
+    if (secs < 86400 * 30) {
+        qint64 d = secs / 86400;
+        return QString("%1 day%2 ago").arg(d).arg(d == 1 ? "" : "s");
+    }
+    return when.toLocalTime().toString("d MMM yyyy");
+}
 
 MainWindow::MainWindow(bool devMode, QWidget *parent)
     : QMainWindow(parent)
@@ -83,6 +132,8 @@ MainWindow::MainWindow(bool devMode, QWidget *parent)
             this, [this](const QString &accountId, const QString &title,
                          const QString &message) {
                 appendLog(QString("BLOCKED [%1]: %2").arg(accountId, message));
+                // Nothing else in the queue would fare any better.
+                cancelMultiLaunch();
                 QMessageBox::critical(this, title, message);
             });
     connect(m_processManager, &ProcessManager::setupComplete,
@@ -243,6 +294,22 @@ void MainWindow::setupUi()
             this, [this](QListWidgetItem *) { onEditAccount(); });
     m_accountList->viewport()->installEventFilter(this);
     leftLayout->addWidget(m_accountList, 1);
+
+    // Multi-account launch: left-click launches the ticked accounts in list
+    // order, right-click picks which ones are ticked.
+    m_multiLaunchBtn = new QPushButton;
+    m_multiLaunchBtn->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_multiLaunchBtn, &QPushButton::clicked,
+            this, &MainWindow::onMultiLaunch);
+    connect(m_multiLaunchBtn, &QWidget::customContextMenuRequested,
+            this, &MainWindow::onMultiLaunchMenu);
+    leftLayout->addWidget(m_multiLaunchBtn);
+
+    m_multiLaunchTimer = new QTimer(this);
+    m_multiLaunchTimer->setSingleShot(true);
+    connect(m_multiLaunchTimer, &QTimer::timeout,
+            this, &MainWindow::processMultiLaunchQueue);
+    updateMultiLaunchButton();
 
     // Status bar
     m_statusLabel = new QLabel;
@@ -455,6 +522,18 @@ void MainWindow::refreshAccountList()
                 leftCol->addWidget(vaultLabel);
             }
 
+            // Line 4: last seen (API last_modified)
+            if (acct.showLastSeen && apiData.account.valid &&
+                !apiData.account.lastModified.isEmpty()) {
+                QString rel = relativeTime(apiData.account.lastModified);
+                if (!rel.isEmpty()) {
+                    auto *seenLabel = new QLabel("Last seen: " + rel);
+                    seenLabel->setFont(apiFont);
+                    seenLabel->setStyleSheet("color: #b0bec5;");
+                    leftCol->addWidget(seenLabel);
+                }
+            }
+
             rowLayout->addLayout(leftCol, 1);
 
             QString accountId = acct.id;
@@ -535,6 +614,7 @@ void MainWindow::updateButtonStates()
         if (acct.isMain) { hasMain = true; break; }
     }
     m_addAltAction->setEnabled(!m_basePrefix.isEmpty() && hasMain);
+    updateMultiLaunchButton();
 }
 
 void MainWindow::appendLog(const QString &message)
@@ -902,6 +982,8 @@ void MainWindow::onSettings()
     dlg.setGw2ExePath(m_gw2ExePath);
     dlg.setApiRefreshInterval(m_accountManager->apiRefreshInterval());
     dlg.setCheckForUpdatesEnabled(m_accountManager->checkForUpdatesEnabled());
+    dlg.setMultiLaunchDelay(m_accountManager->multiLaunchDelay());
+    dlg.setConfirmMultiLaunchEnabled(m_accountManager->confirmMultiLaunch());
 
     if (dlg.exec() == QDialog::Accepted) {
         m_basePrefix = dlg.basePrefix();
@@ -914,6 +996,8 @@ void MainWindow::onSettings()
         m_apiRefreshTimer->start(interval * 60 * 1000);
 
         m_accountManager->setCheckForUpdatesEnabled(dlg.checkForUpdatesEnabled());
+        m_accountManager->setMultiLaunchDelay(dlg.multiLaunchDelay());
+        m_accountManager->setConfirmMultiLaunch(dlg.confirmMultiLaunchEnabled());
 
         appendLog("Settings updated.");
         refreshAccountList();
@@ -1206,12 +1290,253 @@ void MainWindow::onInstanceOutput(const QString &accountId, const QString &outpu
     }
 }
 
+// ---------------------------------------------------------------------------
+// Multi-account launch
+// ---------------------------------------------------------------------------
+
+QString MainWindow::multiLaunchSkipReason(const QString &accountId) const
+{
+    auto acct = m_accountManager->account(accountId);
+    if (acct.id.isEmpty())
+        return "no longer exists";
+
+    if (m_processManager->instanceState(accountId) != ProcessManager::InstanceState::Stopped)
+        return "already running";
+
+    if (!acct.isSteam) {
+        if (m_basePrefix.isEmpty())
+            return "no base prefix configured";
+        if (!acct.isMain &&
+            !QFile::exists(m_overlayManager->dataDir() + "/" + accountId + "/saved/Local.dat"))
+            return "needs Setup first";
+    }
+
+    return QString();
+}
+
+void MainWindow::updateMultiLaunchButton()
+{
+    if (!m_multiLaunchBtn)
+        return;
+
+    if (m_multiLaunchTotal > 0) {
+        int launched = m_multiLaunchTotal - m_multiLaunchQueue.size();
+        m_multiLaunchBtn->setText(QString("Cancel (%1 of %2 launched)")
+                                      .arg(launched).arg(m_multiLaunchTotal));
+        m_multiLaunchBtn->setStyleSheet("background-color: #c62828; color: white;");
+        m_multiLaunchBtn->setToolTip("Stop launching the remaining accounts");
+        return;
+    }
+
+    int selected = 0;
+    for (const auto &acct : m_accountManager->accounts()) {
+        if (acct.multiLaunch) ++selected;
+    }
+
+    if (selected > 0) {
+        m_multiLaunchBtn->setText(QString("Launch Selected (%1)").arg(selected));
+        m_multiLaunchBtn->setStyleSheet("background-color: #2e7d32; color: white;");
+        m_multiLaunchBtn->setToolTip("Launch the ticked accounts one after another\n"
+                                     "(right-click to change the selection)");
+    } else {
+        m_multiLaunchBtn->setText("Select Accounts to Launch…");
+        m_multiLaunchBtn->setStyleSheet(QString());
+        m_multiLaunchBtn->setToolTip("Choose which accounts a single click should launch");
+    }
+}
+
+void MainWindow::onMultiLaunchMenu(const QPoint &pos)
+{
+    showMultiLaunchMenu(m_multiLaunchBtn->mapToGlobal(pos));
+}
+
+void MainWindow::showMultiLaunchMenu(const QPoint &globalPos)
+{
+    if (m_multiLaunchTotal > 0)
+        return;     // selection stays put while a queue is running
+
+    auto accounts = m_accountManager->accounts();
+    if (accounts.isEmpty()) {
+        QMessageBox::information(this, "No Accounts",
+            "Add an account before setting up a multi-account launch.");
+        return;
+    }
+
+    KeepOpenMenu menu(this);
+    menu.setToolTipsVisible(true);
+
+    QAction *header = menu.addAction("Accounts to launch");
+    header->setEnabled(false);
+    menu.addSeparator();
+
+    for (const auto &acct : accounts) {
+        QAction *entry = menu.addAction(acct.displayName);
+        entry->setCheckable(true);
+        entry->setChecked(acct.multiLaunch);
+
+        QString reason = multiLaunchSkipReason(acct.id);
+        if (!reason.isEmpty())
+            entry->setToolTip("Currently would be skipped: " + reason);
+
+        QString id = acct.id;
+        connect(entry, &QAction::toggled, this, [this, id](bool on) {
+            auto acct = m_accountManager->account(id);
+            if (acct.id.isEmpty()) return;
+            acct.multiLaunch = on;
+            m_accountManager->updateAccount(acct);
+            updateMultiLaunchButton();
+        });
+    }
+
+    menu.addSeparator();
+    QAction *selectAll = menu.addAction("Select All");
+    QAction *selectNone = menu.addAction("Select None");
+
+    auto setAll = [this](bool on) {
+        for (auto acct : m_accountManager->accounts()) {
+            if (acct.multiLaunch == on) continue;
+            acct.multiLaunch = on;
+            m_accountManager->updateAccount(acct);
+        }
+        updateMultiLaunchButton();
+    };
+    connect(selectAll, &QAction::triggered, this, [setAll]() { setAll(true); });
+    connect(selectNone, &QAction::triggered, this, [setAll]() { setAll(false); });
+
+    menu.exec(globalPos);
+}
+
+void MainWindow::onMultiLaunch()
+{
+    if (m_multiLaunchTotal > 0) {
+        cancelMultiLaunch();
+        return;
+    }
+
+    QStringList ids;
+    QStringList names;
+    QStringList skipped;
+    for (const auto &acct : m_accountManager->accounts()) {
+        if (!acct.multiLaunch)
+            continue;
+        QString reason = multiLaunchSkipReason(acct.id);
+        if (reason.isEmpty()) {
+            ids << acct.id;
+            names << acct.displayName;
+        } else {
+            skipped << QString("%1 — %2").arg(acct.displayName, reason);
+        }
+    }
+
+    // Nothing ticked at all: go straight to the picker rather than scolding.
+    if (ids.isEmpty() && skipped.isEmpty()) {
+        showMultiLaunchMenu(m_multiLaunchBtn->mapToGlobal(
+            QPoint(0, m_multiLaunchBtn->height())));
+        return;
+    }
+
+    if (ids.isEmpty()) {
+        QMessageBox::information(this, "Nothing to Launch",
+            "None of the selected accounts can launch right now:\n\n  • "
+            + skipped.join("\n  • "));
+        return;
+    }
+
+    int delay = m_accountManager->multiLaunchDelay();
+
+    if (m_accountManager->confirmMultiLaunch()) {
+        QString text = QString("Launch %1 account%2 in this order?\n\n  • %3")
+                           .arg(ids.size())
+                           .arg(ids.size() == 1 ? "" : "s")
+                           .arg(names.join("\n  • "));
+        if (ids.size() > 1) {
+            text += QString("\n\nEach launch starts %1 second%2 after the one before.")
+                        .arg(delay).arg(delay == 1 ? "" : "s");
+        }
+        if (!skipped.isEmpty())
+            text += "\n\nSkipped:\n  • " + skipped.join("\n  • ");
+
+        auto reply = QMessageBox::question(this, "Launch Multiple Accounts", text,
+                                           QMessageBox::Yes | QMessageBox::No,
+                                           QMessageBox::No);
+        if (reply != QMessageBox::Yes)
+            return;
+    }
+
+    for (const auto &entry : skipped)
+        appendLog("Multi-launch: skipping " + entry);
+
+    startMultiLaunchQueue(ids);
+}
+
+void MainWindow::startMultiLaunchQueue(const QStringList &ids)
+{
+    m_multiLaunchQueue = ids;
+    m_multiLaunchTotal = ids.size();
+    appendLog(QString("Multi-launch: %1 account(s), %2s apart.")
+                  .arg(ids.size()).arg(m_accountManager->multiLaunchDelay()));
+    processMultiLaunchQueue();
+}
+
+void MainWindow::processMultiLaunchQueue()
+{
+    if (m_multiLaunchQueue.isEmpty())
+        return;
+
+    QString id = m_multiLaunchQueue.takeFirst();
+    auto acct = m_accountManager->account(id);
+    QString name = acct.displayName.isEmpty() ? id : acct.displayName;
+
+    // Re-check: conditions can change between confirming and reaching this turn.
+    QString reason = multiLaunchSkipReason(id);
+    if (!reason.isEmpty()) {
+        appendLog(QString("Multi-launch: skipping %1 — %2").arg(name, reason));
+    } else {
+        appendLog(QString("Multi-launch: launching %1").arg(name));
+        if (acct.isSteam)
+            launchSteamAccount(id);
+        else
+            m_processManager->launchAccount(id, m_basePrefix, m_gw2ExePath);
+    }
+
+    refreshAccountList();
+
+    if (m_multiLaunchTotal == 0)
+        return;     // cancelled while that launch was in flight
+
+    if (m_multiLaunchQueue.isEmpty()) {
+        appendLog("Multi-launch: finished.");
+        m_multiLaunchTotal = 0;
+        updateMultiLaunchButton();
+        return;
+    }
+
+    m_multiLaunchTimer->start(m_accountManager->multiLaunchDelay() * 1000);
+    updateMultiLaunchButton();
+}
+
+void MainWindow::cancelMultiLaunch()
+{
+    if (m_multiLaunchTotal == 0)
+        return;
+
+    m_multiLaunchTimer->stop();
+    if (!m_multiLaunchQueue.isEmpty()) {
+        appendLog(QString("Multi-launch cancelled — %1 account(s) not launched.")
+                      .arg(m_multiLaunchQueue.size()));
+    }
+    m_multiLaunchQueue.clear();
+    m_multiLaunchTotal = 0;
+    updateMultiLaunchButton();
+}
+
 void MainWindow::fetchApiData()
 {
     bool fetching = false;
     for (const auto &acct : m_accountManager->accounts()) {
         if (!acct.apiKey.isEmpty() &&
-            (acct.showAccountName || acct.showDailyVault || acct.showWeeklyVault)) {
+            (acct.showAccountName || acct.showDailyVault || acct.showWeeklyVault ||
+             acct.showLastSeen)) {
             m_apiClient->fetchAccountData(acct.id, acct.apiKey);
             fetching = true;
         }

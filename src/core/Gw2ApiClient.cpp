@@ -21,7 +21,8 @@ void Gw2ApiClient::fetchAccountData(const QString &accountId, const QString &api
 
     m_pendingCount[accountId] = 3;
 
-    doGet(accountId, apiKey, "/account", "account");
+    // last_modified is only returned for schema versions 2019-02-21 or later.
+    doGet(accountId, apiKey, "/account?v=2019-02-21T00:00:00Z", "account");
     doGet(accountId, apiKey, "/account/wizardsvault/daily", "daily");
     doGet(accountId, apiKey, "/account/wizardsvault/weekly", "weekly");
 }
@@ -74,6 +75,7 @@ void Gw2ApiClient::handleReply(QNetworkReply *reply)
             data.account.name = obj.value("name").toString();
             data.account.world = obj.value("world").toInt();
             data.account.created = obj.value("created").toString();
+            data.account.lastModified = obj.value("last_modified").toString();
             data.account.valid = true;
         } else if (tag == "daily") {
             data.dailyVault = parseVault(obj);

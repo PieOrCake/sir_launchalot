@@ -38,6 +38,7 @@ private:
     QCheckBox *m_showAccountNameCheck;
     QCheckBox *m_showDailyVaultCheck;
     QCheckBox *m_showWeeklyVaultCheck;
+    QCheckBox *m_showLastSeenCheck;
     QTableWidget *m_sidecarTable;
     QList<AccountManager::SidecarProgram> m_sidecars;
     void refreshSidecarTable();

@@ -142,6 +142,8 @@ void AccountDialog::setupUi()
     apiLayout->addWidget(m_showDailyVaultCheck);
     m_showWeeklyVaultCheck = new QCheckBox("Weekly Wizard's Vault progress");
     apiLayout->addWidget(m_showWeeklyVaultCheck);
+    m_showLastSeenCheck = new QCheckBox("Last seen");
+    apiLayout->addWidget(m_showLastSeenCheck);
     layout->addWidget(apiGroup);
 
     // Sidecar Programs section
@@ -239,6 +241,7 @@ void AccountDialog::setAccount(const AccountManager::Account &account)
     m_showAccountNameCheck->setChecked(account.showAccountName);
     m_showDailyVaultCheck->setChecked(account.showDailyVault);
     m_showWeeklyVaultCheck->setChecked(account.showWeeklyVault);
+    m_showLastSeenCheck->setChecked(account.showLastSeen);
     m_sidecars = account.sidecars;
     refreshSidecarTable();
 }
@@ -267,6 +270,7 @@ AccountManager::Account AccountDialog::account() const
     acct.showAccountName = m_showAccountNameCheck->isChecked();
     acct.showDailyVault = m_showDailyVaultCheck->isChecked();
     acct.showWeeklyVault = m_showWeeklyVaultCheck->isChecked();
+    acct.showLastSeen = m_showLastSeenCheck->isChecked();
     acct.sidecars = m_sidecars;
 
     return acct;
