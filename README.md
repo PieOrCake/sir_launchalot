@@ -26,7 +26,8 @@ If an LLM creating software upsets you, then perhaps this repo isn't for you. Mo
 - **External app launcher** — launch companion apps (Discord, TeamSpeak, etc.) from the same UI
 - **Sidecar programs** — run extra Windows programs alongside an account, such as the Discord IPC bridge for Rich Presence
 - **Per-account launch arguments** — add your own command-line arguments to any account
-- **GW2 API integration** — display account name, last seen time, and Wizard's Vault daily/weekly progress per account, with auto-refresh
+- **Per-account environment variables** — set variables like `DXVK_HUD` or `MANGOHUD` for one account without affecting the others
+- **GW2 API integration** — display account name, last seen time, and Wizard's Vault daily/weekly progress per account, with auto-refresh. Last seen updates the moment you close a game launched here, rather than waiting for the API to catch up
 - **Instance monitoring** — track running accounts with start/stop controls
 - Runs on any Linux distro via AppImage
 

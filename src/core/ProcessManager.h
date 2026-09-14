@@ -55,14 +55,15 @@ public:
     void setProtonPath(const QString &path);
     QString protonPath() const;
 
-    QProcessEnvironment buildEnvironment(const QString &accountId,
-                                          const QString &mergedPrefix) const;
-
     // Re-copies addon settings from the main install over an alt's own copies,
     // discarding anything changed on the alt. Returns false when the alt has no
     // addon folder yet, in which case the next launch seeds it anyway.
     bool resyncAddonSettings(const QString &accountId, const QString &basePrefix,
                              const QString &exePath);
+
+    // Shell export lines for an account's environment variables, with the
+    // launcher's own variables filtered out. Public so it can be tested.
+    static QString envExportLines(const QMap<QString, QString> &vars);
 
 signals:
     void instanceStarted(const QString &accountId);

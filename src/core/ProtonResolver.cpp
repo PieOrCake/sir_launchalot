@@ -52,10 +52,15 @@ QString readRequiredAppId(const QString &manifestPath)
     return m.hasMatch() ? m.captured(1) : QString();
 }
 
-// Parse the trailing MAJOR-MINOR from a GE-Proton-style directory name.
+// Parse MAJOR-MINOR from a GE-Proton-style directory name.
+//
+// An architecture suffix is allowed after the version: GE-Proton11-5 and
+// GE-Proton11-5-x86_64 are the same release. Without this, releases from
+// GE-Proton11-5 onwards parse as "no version", sort below everything else, and
+// the launcher silently picks an older Proton instead (issue #8).
 void parseVersion(const QString &name, int &major, int &minor)
 {
-    QRegularExpression re(QStringLiteral("(\\d+)-(\\d+)\\s*$"));
+    QRegularExpression re(QStringLiteral("(\\d+)-(\\d+)(?:-[A-Za-z0-9_]+)?\\s*$"));
     auto m = re.match(name);
     if (m.hasMatch()) {
         major = m.captured(1).toInt();

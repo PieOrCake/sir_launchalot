@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QString>
 #include <QList>
+#include <QDateTime>
 #include <QJsonObject>
 
 class AccountManager : public QObject
@@ -63,7 +64,17 @@ public:
         bool showWeeklyVault = false;   // display weekly wizard's vault status
         bool showLastSeen = false;      // display API last_modified timestamp
         bool multiLaunch = false;       // include in the multi-account launch
+        qint64 lastPlayed = 0;          // epoch seconds when a session last ended, 0 = never
     };
+
+    // Environment variables the launcher sets for itself. A per-account variable
+    // with one of these names is ignored — WINEPREFIX in particular is what keeps
+    // accounts apart.
+    static const QStringList &managedEnvVars();
+
+    // When an account was last seen: the later of the API's last_modified and
+    // the end of a session this launcher watched. Invalid when neither is known.
+    static QDateTime lastSeen(const QString &apiLastModified, qint64 lastPlayed);
 
     bool load();
     bool save() const;

@@ -23,6 +23,28 @@ static AccountManager::AddonMode addonModeFromString(const QString &s)
     return AccountManager::AddonMode::All;
 }
 
+const QStringList &AccountManager::managedEnvVars()
+{
+    static const QStringList vars = {"WINEPREFIX", "PROTONPATH", "GAMEID", "STORE"};
+    return vars;
+}
+
+QDateTime AccountManager::lastSeen(const QString &apiLastModified, qint64 lastPlayed)
+{
+    QDateTime seen;
+    if (!apiLastModified.isEmpty())
+        seen = QDateTime::fromString(apiLastModified, Qt::ISODate);
+
+    // The API only reflects a logout about five minutes after the fact, so a
+    // session this launcher saw end is both sooner and more accurate.
+    if (lastPlayed > 0) {
+        const QDateTime played = QDateTime::fromSecsSinceEpoch(lastPlayed, Qt::UTC);
+        if (!seen.isValid() || played > seen)
+            seen = played;
+    }
+    return seen;
+}
+
 AccountManager::AccountManager(QObject *parent)
     : QObject(parent)
 {
@@ -514,6 +536,7 @@ QJsonObject AccountManager::accountToJson(const Account &account) const
     obj["showWeeklyVault"] = account.showWeeklyVault;
     obj["showLastSeen"] = account.showLastSeen;
     obj["multiLaunch"] = account.multiLaunch;
+    if (account.lastPlayed > 0) obj["lastPlayed"] = account.lastPlayed;
 
     return obj;
 }
@@ -576,6 +599,7 @@ AccountManager::Account AccountManager::accountFromJson(const QJsonObject &obj) 
     acct.showWeeklyVault = obj.value("showWeeklyVault").toBool(false);
     acct.showLastSeen = obj.value("showLastSeen").toBool(false);
     acct.multiLaunch = obj.value("multiLaunch").toBool(false);
+    acct.lastPlayed = static_cast<qint64>(obj.value("lastPlayed").toDouble(0));
 
     return acct;
 }

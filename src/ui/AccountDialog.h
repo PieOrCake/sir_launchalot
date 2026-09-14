@@ -8,6 +8,7 @@
 #include <QHash>
 #include <QLineEdit>
 #include <QList>
+#include <QMap>
 #include <QPushButton>
 #include <QTableWidget>
 #include <QVBoxLayout>
@@ -33,17 +34,25 @@ signals:
     // Asks the owner to re-copy this alt's addon settings from the main install.
     void resyncAddonSettingsRequested(const QString &accountId);
 
+protected:
+    // Sizes the window once, on first show, when every section has been filled in.
+    void showEvent(QShowEvent *event) override;
+
 private:
     void setupUi();
     void buildAddonSection(QVBoxLayout *parent);
+    void buildEnvSection(QVBoxLayout *parent);
+    void refreshEnvTable();
     void rebuildAddonTable();
     void applyAddonMode();
     void startSizeScan();
 
+    bool m_sized = false;
     bool m_editMode = false;
     bool m_steamMode = false;
     QString m_accountId;
     QString m_basePrefix;
+    QWidget *m_content = nullptr;
     QLineEdit *m_nameEdit;
     QLineEdit *m_argsEdit;
     QCheckBox *m_mainCheck;
@@ -69,6 +78,8 @@ private:
     QCheckBox *m_showDailyVaultCheck;
     QCheckBox *m_showWeeklyVaultCheck;
     QCheckBox *m_showLastSeenCheck;
+    QTableWidget *m_envTable = nullptr;
+    QMap<QString, QString> m_envVars;
     QTableWidget *m_sidecarTable;
     QList<AccountManager::SidecarProgram> m_sidecars;
     void refreshSidecarTable();

@@ -747,14 +747,6 @@ QStringList ProcessManager::buildLaunchArgs(const QString &exePath,
     return {};  // unused — args now built inline before writeUmuScript
 }
 
-QProcessEnvironment ProcessManager::buildEnvironment(const QString &accountId,
-                                                       const QString &mergedPrefix) const
-{
-    Q_UNUSED(accountId)
-    Q_UNUSED(mergedPrefix)
-    return QProcessEnvironment();  // unused — umu-run handles all env setup
-}
-
 QString ProcessManager::effectiveProtonPath(const QString &accountId)
 {
     // An explicit user choice is always honoured as-is.
@@ -1067,6 +1059,34 @@ QString ProcessManager::prepareStrippedGameDir(const QString &accountId,
     return destDir;
 }
 
+// Shell `export` lines for an account's own environment variables.
+//
+// The variables the launcher sets for itself are skipped rather than allowed to
+// be replaced: WINEPREFIX in particular is the whole basis of keeping accounts
+// apart, and silently letting an account override it would be a nasty way to
+// find out. Values are single-quoted, so anything may appear in them.
+QString ProcessManager::envExportLines(const QMap<QString, QString> &vars)
+{
+    QString text;
+    QTextStream out(&text);
+    bool wroteHeader = false;
+
+    for (auto it = vars.constBegin(); it != vars.constEnd(); ++it) {
+        const QString key = it.key().trimmed();
+        if (key.isEmpty()) continue;
+        if (AccountManager::managedEnvVars().contains(key, Qt::CaseInsensitive)) continue;
+
+        if (!wroteHeader) {
+            out << "\n# Per-account environment\n";
+            wroteHeader = true;
+        }
+        QString value = it.value();
+        value.replace("'", "'\\''");
+        out << "export " << key << "='" << value << "'\n";
+    }
+    return text;
+}
+
 QString ProcessManager::writeUmuScript(const QString &accountId, const QString &winePrefix,
                                         const QString &exePath, const QStringList &extraArgs,
                                         const QString &gameid, const QString &protonPath,
@@ -1095,6 +1115,8 @@ QString ProcessManager::writeUmuScript(const QString &accountId, const QString &
     // GAMEID — used by umu for protonfixes and by KDE for window identification
     out << "export GAMEID='" << gameid << "'\n";
     out << "export STORE='none'\n";
+
+    out << envExportLines(m_accounts->account(accountId).envVars);
 
     // Working directory
     QString workDir = QFileInfo(exePath).absolutePath();

@@ -60,9 +60,8 @@ protected:
     }
 };
 
-static QString relativeTime(const QString &iso)
+static QString relativeTime(const QDateTime &when)
 {
-    QDateTime when = QDateTime::fromString(iso, Qt::ISODate);
     if (!when.isValid())
         return QString();
 
@@ -84,6 +83,11 @@ static QString relativeTime(const QString &iso)
         return QString("%1 day%2 ago").arg(d).arg(d == 1 ? "" : "s");
     }
     return when.toLocalTime().toString("d MMM yyyy");
+}
+
+static QString relativeTime(const QString &iso)
+{
+    return relativeTime(QDateTime::fromString(iso, Qt::ISODate));
 }
 
 MainWindow::MainWindow(bool devMode, QWidget *parent)
@@ -522,10 +526,14 @@ void MainWindow::refreshAccountList()
                 leftCol->addWidget(vaultLabel);
             }
 
-            // Line 4: last seen (API last_modified)
-            if (acct.showLastSeen && apiData.account.valid &&
-                !apiData.account.lastModified.isEmpty()) {
-                QString rel = relativeTime(apiData.account.lastModified);
+            // Line 4: last seen — the newer of the API's last_modified and the
+            // end of a session this launcher watched. The API lags roughly five
+            // minutes behind a logout, so for an account played through Sir
+            // Launchalot the local time is both sooner and more accurate.
+            if (acct.showLastSeen) {
+                const QString apiSeen = apiData.account.valid
+                    ? apiData.account.lastModified : QString();
+                QString rel = relativeTime(AccountManager::lastSeen(apiSeen, acct.lastPlayed));
                 if (!rel.isEmpty()) {
                     auto *seenLabel = new QLabel("Last seen: " + rel);
                     seenLabel->setFont(apiFont);
@@ -875,7 +883,7 @@ void MainWindow::onEditAccount()
         updated.localDatPath = acct.localDatPath;
         updated.gfxSettingsPath = acct.gfxSettingsPath;
         // extraArgs is managed by the dialog now
-        updated.envVars = acct.envVars;
+        // envVars is managed by the dialog now
         // isSteam and launchCommand are managed by the dialog
         if (m_accountManager->updateAccount(updated)) {
             appendLog(QString("Updated account: %1").arg(updated.displayName));
@@ -1288,6 +1296,16 @@ void MainWindow::onInstanceStarted(const QString &accountId)
 void MainWindow::onInstanceStopped(const QString &accountId)
 {
     appendLog(QString("Instance stopped: %1").arg(accountId));
+
+    // Record when this account was last played. The GW2 API only catches up
+    // about five minutes after a logout, which is too slow to tell at a glance
+    // which account you have already been through (issue #6).
+    auto acct = m_accountManager->account(accountId);
+    if (!acct.id.isEmpty()) {
+        acct.lastPlayed = QDateTime::currentSecsSinceEpoch();
+        m_accountManager->updateAccount(acct);
+    }
+
     refreshAccountList();
 }
 

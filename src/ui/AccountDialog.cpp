@@ -12,6 +12,9 @@
 #include <QProcess>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QScreen>
+#include <QScrollArea>
+#include <QShowEvent>
 #include <QThreadPool>
 #include <QTableWidget>
 #include <QMessageBox>
@@ -83,6 +86,55 @@ static bool editSidecar(AccountManager::SidecarProgram &sc, QWidget *parent,
     return true;
 }
 
+// Edit one environment variable. Returns false if cancelled or invalid.
+static bool editEnvVar(QString &name, QString &value, QWidget *parent)
+{
+    QDialog dlg(parent);
+    dlg.setWindowTitle(name.isEmpty() ? "Add Variable" : "Edit Variable");
+    dlg.setMinimumWidth(420);
+    auto *layout = new QVBoxLayout(&dlg);
+    auto *form = new QFormLayout;
+
+    auto *nameEdit = new QLineEdit(name);
+    nameEdit->setPlaceholderText("e.g. DXVK_HUD");
+    form->addRow("Name:", nameEdit);
+
+    auto *valueEdit = new QLineEdit(value);
+    valueEdit->setPlaceholderText("e.g. fps,memory");
+    form->addRow("Value:", valueEdit);
+    layout->addLayout(form);
+
+    auto *note = new QLabel(
+        QString("Set before the game starts. %1 are set by the launcher and cannot "
+                "be overridden here.").arg(AccountManager::managedEnvVars().join(", ")));
+    note->setWordWrap(true);
+    note->setStyleSheet("color: gray; font-size: 11px;");
+    layout->addWidget(note);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    if (dlg.exec() != QDialog::Accepted) return false;
+
+    const QString newName = nameEdit->text().trimmed();
+    if (newName.isEmpty()) {
+        QMessageBox::warning(parent, "Environment Variable", "Name is required.");
+        return false;
+    }
+    if (AccountManager::managedEnvVars().contains(newName, Qt::CaseInsensitive)) {
+        QMessageBox::warning(parent, "Environment Variable",
+            QString("%1 is set by Sir Launchalot and would break this account's "
+                    "Wine prefix if changed here.").arg(newName));
+        return false;
+    }
+
+    name = newName;
+    value = valueEdit->text();
+    return true;
+}
+
 AccountDialog::AccountDialog(QWidget *parent)
     : QDialog(parent)
 {
@@ -93,7 +145,11 @@ AccountDialog::AccountDialog(QWidget *parent)
 
 void AccountDialog::setupUi()
 {
-    auto *layout = new QVBoxLayout(this);
+    // The sections below add up to more height than a laptop screen has, so the
+    // content scrolls and only the OK/Cancel row is pinned. Without this the
+    // layout squeezes its children past their minimums and they overlap.
+    auto *content = new QWidget;
+    auto *layout = new QVBoxLayout(content);
     // Minimum rather than fixed: the addon table is the one part of this dialog
     // worth widening, and a fixed size leaves no way to read a clipped column.
     layout->setSizeConstraint(QLayout::SetMinimumSize);
@@ -114,6 +170,7 @@ void AccountDialog::setupUi()
     m_mainCheck->setVisible(false);
 
     buildAddonSection(layout);
+    buildEnvSection(layout);
 
     // Launch command (shown for Steam accounts only)
     auto *cmdForm = new QFormLayout;
@@ -201,10 +258,35 @@ void AccountDialog::setupUi()
                 refreshSidecarTable();
     });
 
+    auto *scroll = new QScrollArea;
+    scroll->setWidget(content);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    layout->addWidget(buttons);
+
+    auto *outer = new QVBoxLayout(this);
+    outer->addWidget(scroll, 1);
+    outer->addWidget(buttons);
+    m_content = content;
+}
+
+void AccountDialog::showEvent(QShowEvent *event)
+{
+    QDialog::showEvent(event);
+    if (m_sized) return;
+    m_sized = true;
+
+    // Only now is every section populated and its visibility settled, so this is
+    // the first point at which the content's real size is known. Open big enough
+    // to show it, but never bigger than the screen — the rest scrolls.
+    const QRect avail = screen() ? screen()->availableGeometry() : QRect(0, 0, 1280, 800);
+    const QSize want = m_content->sizeHint();
+    resize(qMin(want.width() + 48, avail.width() - 80),
+           qMin(want.height() + 72, avail.height() - 80));
 }
 
 // A table that asks for room to show about eight rows, but will shrink to four
@@ -456,6 +538,80 @@ void AccountDialog::startSizeScan()
     });
 }
 
+void AccountDialog::buildEnvSection(QVBoxLayout *parent)
+{
+    auto *group = new QGroupBox("Environment Variables");
+    auto *box = new QVBoxLayout(group);
+
+    m_envTable = new QTableWidget(0, 2);
+    m_envTable->setHorizontalHeaderLabels({"Name", "Value"});
+    m_envTable->horizontalHeader()->setStretchLastSection(true);
+    m_envTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Interactive);
+    m_envTable->setColumnWidth(0, m_envTable->fontMetrics()
+                                      .horizontalAdvance("WINEDLLOVERRIDES") + 24);
+    m_envTable->verticalHeader()->setVisible(false);
+    m_envTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_envTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_envTable->setMinimumHeight(90);
+    box->addWidget(m_envTable);
+
+    auto *note = new QLabel("Applied to this account's game process at launch.");
+    note->setWordWrap(true);
+    note->setStyleSheet("color: gray; font-size: 11px;");
+    box->addWidget(note);
+
+    auto *btnRow = new QHBoxLayout;
+    auto *addBtn = new QPushButton("Add");
+    auto *editBtn = new QPushButton("Edit");
+    auto *removeBtn = new QPushButton("Remove");
+    btnRow->addWidget(addBtn);
+    btnRow->addWidget(editBtn);
+    btnRow->addWidget(removeBtn);
+    btnRow->addStretch();
+    box->addLayout(btnRow);
+    parent->addWidget(group);
+
+    connect(addBtn, &QPushButton::clicked, this, [this]() {
+        QString name, value;
+        if (editEnvVar(name, value, this)) {
+            m_envVars.insert(name, value);
+            refreshEnvTable();
+        }
+    });
+
+    auto editCurrent = [this]() {
+        const int row = m_envTable->currentRow();
+        auto *item = m_envTable->item(row, 0);
+        if (!item) return;
+        QString name = item->text();
+        QString value = m_envVars.value(name);
+        const QString original = name;
+        if (!editEnvVar(name, value, this)) return;
+        if (name != original) m_envVars.remove(original);   // renamed
+        m_envVars.insert(name, value);
+        refreshEnvTable();
+    };
+    connect(editBtn, &QPushButton::clicked, this, editCurrent);
+    connect(m_envTable, &QTableWidget::doubleClicked, this, editCurrent);
+
+    connect(removeBtn, &QPushButton::clicked, this, [this]() {
+        auto *item = m_envTable->item(m_envTable->currentRow(), 0);
+        if (!item) return;
+        m_envVars.remove(item->text());
+        refreshEnvTable();
+    });
+}
+
+void AccountDialog::refreshEnvTable()
+{
+    m_envTable->setRowCount(m_envVars.size());
+    int row = 0;
+    for (auto it = m_envVars.constBegin(); it != m_envVars.constEnd(); ++it, ++row) {
+        m_envTable->setItem(row, 0, new QTableWidgetItem(it.key()));
+        m_envTable->setItem(row, 1, new QTableWidgetItem(it.value()));
+    }
+}
+
 void AccountDialog::refreshSidecarTable()
 {
     m_sidecarTable->setRowCount(m_sidecars.size());
@@ -499,6 +655,8 @@ void AccountDialog::setAccount(const AccountManager::Account &account)
     m_showDailyVaultCheck->setChecked(account.showDailyVault);
     m_showWeeklyVaultCheck->setChecked(account.showWeeklyVault);
     m_showLastSeenCheck->setChecked(account.showLastSeen);
+    m_envVars = account.envVars;
+    refreshEnvTable();
     m_sidecars = account.sidecars;
     refreshSidecarTable();
 }
@@ -549,6 +707,7 @@ AccountManager::Account AccountDialog::account() const
     acct.showDailyVault = m_showDailyVaultCheck->isChecked();
     acct.showWeeklyVault = m_showWeeklyVaultCheck->isChecked();
     acct.showLastSeen = m_showLastSeenCheck->isChecked();
+    acct.envVars = m_envVars;
     acct.sidecars = m_sidecars;
 
     return acct;
