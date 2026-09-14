@@ -10,6 +10,7 @@
 #include <QList>
 #include <QMap>
 #include <QPushButton>
+#include <QTabWidget>
 #include <QTableWidget>
 #include <QVBoxLayout>
 
@@ -40,8 +41,13 @@ protected:
 
 private:
     void setupUi();
-    void buildAddonSection(QVBoxLayout *parent);
-    void buildEnvSection(QVBoxLayout *parent);
+    QWidget *buildAddonPage();
+    QWidget *buildEnvPage();
+    QWidget *buildApiPage();
+    QWidget *buildSidecarPage();
+    // Qt has no "hide tab", so the Addons tab is removed and re-inserted. The
+    // page stays owned by the dialog while it is out of the tab widget.
+    void setAddonTabVisible(bool visible);
     void refreshEnvTable();
     void rebuildAddonTable();
     void applyAddonMode();
@@ -52,14 +58,14 @@ private:
     bool m_steamMode = false;
     QString m_accountId;
     QString m_basePrefix;
-    QWidget *m_content = nullptr;
     QLineEdit *m_nameEdit;
     QLineEdit *m_argsEdit;
     QCheckBox *m_mainCheck;
 
     // Addons
     QString m_addonsDir;
-    QGroupBox *m_addonGroup = nullptr;
+    QTabWidget *m_tabs = nullptr;
+    QWidget *m_addonPage = nullptr;
     QComboBox *m_addonModeCombo = nullptr;
     QWidget *m_addonPicker = nullptr;
     QTableWidget *m_addonTable = nullptr;

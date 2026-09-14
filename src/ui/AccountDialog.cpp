@@ -158,15 +158,11 @@ AccountDialog::AccountDialog(QWidget *parent)
 
 void AccountDialog::setupUi()
 {
-    // The sections below add up to more height than a laptop screen has, so the
-    // content scrolls and only the OK/Cancel row is pinned. Without this the
-    // layout squeezes its children past their minimums and they overlap.
-    auto *content = new QWidget;
-    auto *layout = new QVBoxLayout(content);
-    // Minimum rather than fixed: the addon table is the one part of this dialog
-    // worth widening, and a fixed size leaves no way to read a clipped column.
-    layout->setSizeConstraint(QLayout::SetMinimumSize);
+    auto *outer = new QVBoxLayout(this);
 
+    // Name and arguments stay above the tabs. They are short, and keeping them
+    // in view means the account being edited is always identifiable whichever
+    // tab is open — picking the wrong one here has real consequences.
     auto *form = new QFormLayout;
     m_nameEdit = new QLineEdit;
     m_nameEdit->setPlaceholderText("e.g. Alt1, PvP Account, Crafter");
@@ -177,71 +173,110 @@ void AccountDialog::setupUi()
     m_argsEdit->setPlaceholderText("e.g. -shareArchive -maploadinfo");
     m_argsEdit->setToolTip("Extra command-line arguments passed to Gw2-64.exe");
     form->addRow("Extra arguments:", m_argsEdit);
-    layout->addLayout(form);
+
+    // Steam accounts only; hidden otherwise.
+    m_launchCommandEdit = new QLineEdit;
+    m_launchCommandEdit->setMinimumWidth(350);
+    form->addRow("Launch command:", m_launchCommandEdit);
+    m_launchCommandLabel = form->labelForField(m_launchCommandEdit);
+    m_launchCommandEdit->setVisible(false);
+    m_launchCommandLabel->setVisible(false);
+
+    outer->addLayout(form);
 
     m_mainCheck = new QCheckBox;
     m_mainCheck->setVisible(false);
 
-    buildAddonSection(layout);
-    buildEnvSection(layout);
+    // Four independent concerns. Stacked vertically they made the dialog taller
+    // than a screen; as tabs the window is about the height of the tallest one.
+    m_tabs = new QTabWidget;
+    m_addonPage = buildAddonPage();
+    m_tabs->addTab(m_addonPage, "Addons");
+    m_tabs->addTab(buildEnvPage(), "Environment");
+    m_tabs->addTab(buildApiPage(), "GW2 API");
+    m_tabs->addTab(buildSidecarPage(), "Sidecars");
+    outer->addWidget(m_tabs, 1);
 
-    // Launch command (shown for Steam accounts only)
-    auto *cmdForm = new QFormLayout;
-    m_launchCommandEdit = new QLineEdit;
-    m_launchCommandEdit->setMinimumWidth(350);
-    cmdForm->addRow("Launch command:", m_launchCommandEdit);
-    layout->addLayout(cmdForm);
-    m_launchCommandLabel = cmdForm->labelForField(m_launchCommandEdit);
-    m_launchCommandEdit->setVisible(false);
-    m_launchCommandLabel->setVisible(false);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    outer->addWidget(buttons);
+}
 
-    // GW2 API section
-    auto *apiGroup = new QGroupBox("GW2 API");
-    auto *apiLayout = new QVBoxLayout(apiGroup);
+void AccountDialog::setAddonTabVisible(bool visible)
+{
+    const int idx = m_tabs->indexOf(m_addonPage);
+    if (visible && idx < 0) {
+        m_tabs->insertTab(0, m_addonPage, "Addons");   // always the first tab
+        m_addonPage->show();
+    } else if (!visible && idx >= 0) {
+        m_tabs->removeTab(idx);
+        // removeTab hands ownership back, so re-parent and hide rather than
+        // leaving a stray widget floating over the dialog.
+        m_addonPage->setParent(this);
+        m_addonPage->hide();
+    }
+}
+
+QWidget *AccountDialog::buildApiPage()
+{
+    auto *page = new QWidget;
+    auto *box = new QVBoxLayout(page);
+
     auto *apiForm = new QFormLayout;
     m_apiKeyEdit = new QLineEdit;
     m_apiKeyEdit->setPlaceholderText("Paste API key from account.arena.net");
     m_apiKeyEdit->setMinimumWidth(350);
-    
     apiForm->addRow("API Key:", m_apiKeyEdit);
-    apiLayout->addLayout(apiForm);
+    box->addLayout(apiForm);
 
-    auto *showLabel = new QLabel("Show in account list:");
-    apiLayout->addWidget(showLabel);
+    box->addWidget(new QLabel("Show in account list:"));
     m_showAccountNameCheck = new QCheckBox("Account name");
-    apiLayout->addWidget(m_showAccountNameCheck);
+    box->addWidget(m_showAccountNameCheck);
     m_showDailyVaultCheck = new QCheckBox("Daily Wizard's Vault progress");
-    apiLayout->addWidget(m_showDailyVaultCheck);
+    box->addWidget(m_showDailyVaultCheck);
     m_showWeeklyVaultCheck = new QCheckBox("Weekly Wizard's Vault progress");
-    apiLayout->addWidget(m_showWeeklyVaultCheck);
+    box->addWidget(m_showWeeklyVaultCheck);
     m_showLastSeenCheck = new QCheckBox("Last seen");
-    apiLayout->addWidget(m_showLastSeenCheck);
-    layout->addWidget(apiGroup);
+    box->addWidget(m_showLastSeenCheck);
+    box->addStretch();
+    return page;
+}
 
-    // Sidecar Programs section
-    auto *sidecarGroup = new QGroupBox("Sidecar Programs");
-    auto *sidecarLayout = new QVBoxLayout(sidecarGroup);
+QWidget *AccountDialog::buildSidecarPage()
+{
+    auto *page = new QWidget;
+    auto *box = new QVBoxLayout(page);
 
     m_sidecarTable = new QTableWidget(0, 2);
     m_sidecarTable->setHorizontalHeaderLabels({"Name", "Exe Path"});
     m_sidecarTable->horizontalHeader()->setStretchLastSection(true);
+    m_sidecarTable->verticalHeader()->setVisible(false);
     m_sidecarTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_sidecarTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_sidecarTable->setMinimumHeight(100);
-    sidecarLayout->addWidget(m_sidecarTable);
+    box->addWidget(m_sidecarTable);
 
-    auto *scBtnLayout = new QHBoxLayout;
-    auto *scAddBtn = new QPushButton("Add");
-    auto *scEditBtn = new QPushButton("Edit");
-    auto *scRemoveBtn = new QPushButton("Remove");
-    scBtnLayout->addWidget(scAddBtn);
-    scBtnLayout->addWidget(scEditBtn);
-    scBtnLayout->addWidget(scRemoveBtn);
-    scBtnLayout->addStretch();
-    sidecarLayout->addLayout(scBtnLayout);
-    layout->addWidget(sidecarGroup);
+    auto *note = new QLabel("Windows programs launched alongside this account, "
+                            "such as the Discord IPC bridge.");
+    note->setWordWrap(true);
+    note->setStyleSheet("color: gray; font-size: 11px;");
+    box->addWidget(note);
 
-    connect(scAddBtn, &QPushButton::clicked, this, [this]() {
+    auto *btnRow = new QHBoxLayout;
+    auto *addBtn = new QPushButton("Add");
+    addBtn->setObjectName("envAddButton");
+    auto *editBtn = new QPushButton("Edit");
+    editBtn->setObjectName("envEditButton");
+    auto *removeBtn = new QPushButton("Remove");
+    removeBtn->setObjectName("envRemoveButton");
+    btnRow->addWidget(addBtn);
+    btnRow->addWidget(editBtn);
+    btnRow->addWidget(removeBtn);
+    btnRow->addStretch();
+    box->addLayout(btnRow);
+
+    connect(addBtn, &QPushButton::clicked, this, [this]() {
         AccountManager::SidecarProgram sc;
         if (editSidecar(sc, this, m_basePrefix)) {
             sc.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -250,14 +285,14 @@ void AccountDialog::setupUi()
         }
     });
 
-    connect(scEditBtn, &QPushButton::clicked, this, [this]() {
+    connect(editBtn, &QPushButton::clicked, this, [this]() {
         int row = m_sidecarTable->currentRow();
         if (row < 0 || row >= m_sidecars.size()) return;
         if (editSidecar(m_sidecars[row], this))
             refreshSidecarTable();
     });
 
-    connect(scRemoveBtn, &QPushButton::clicked, this, [this]() {
+    connect(removeBtn, &QPushButton::clicked, this, [this]() {
         int row = m_sidecarTable->currentRow();
         if (row < 0 || row >= m_sidecars.size()) return;
         m_sidecars.removeAt(row);
@@ -271,20 +306,7 @@ void AccountDialog::setupUi()
                 refreshSidecarTable();
     });
 
-    auto *scroll = new QScrollArea;
-    scroll->setWidget(content);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
-
-    auto *outer = new QVBoxLayout(this);
-    outer->addWidget(scroll, 1);
-    outer->addWidget(buttons);
-    m_content = content;
+    return page;
 }
 
 void AccountDialog::showEvent(QShowEvent *event)
@@ -293,13 +315,12 @@ void AccountDialog::showEvent(QShowEvent *event)
     if (m_sized) return;
     m_sized = true;
 
-    // Only now is every section populated and its visibility settled, so this is
-    // the first point at which the content's real size is known. Open big enough
-    // to show it, but never bigger than the screen — the rest scrolls.
+    // Only now are the tabs settled — setAccount decides whether the Addons tab
+    // is there at all. Open at the natural size, clamped to the screen.
     const QRect avail = screen() ? screen()->availableGeometry() : QRect(0, 0, 1280, 800);
-    const QSize want = m_content->sizeHint();
-    resize(qMin(want.width() + 48, avail.width() - 80),
-           qMin(want.height() + 72, avail.height() - 80));
+    const QSize want = sizeHint();
+    resize(qMin(want.width(), avail.width() - 80),
+           qMin(want.height(), avail.height() - 80));
 }
 
 // A table that asks for room to show about eight rows, but will shrink to four
@@ -321,10 +342,10 @@ public:
 // Column layout of the addon picker.
 enum AddonColumn { ColAddon = 0, ColCopySettings, ColDataDir, ColSize, ColCount };
 
-void AccountDialog::buildAddonSection(QVBoxLayout *parent)
+QWidget *AccountDialog::buildAddonPage()
 {
-    m_addonGroup = new QGroupBox("Addons");
-    auto *box = new QVBoxLayout(m_addonGroup);
+    auto *page = new QWidget;
+    auto *box = new QVBoxLayout(page);
 
     m_addonModeCombo = new QComboBox;
     m_addonModeCombo->addItem("No addons", static_cast<int>(AccountManager::AddonMode::Off));
@@ -391,9 +412,8 @@ void AccountDialog::buildAddonSection(QVBoxLayout *parent)
     btnRow->addStretch();
     pick->addLayout(btnRow);
 
-    box->addWidget(m_addonPicker);
+    box->addWidget(m_addonPicker, 1);
     m_addonPicker->setVisible(false);
-    parent->addWidget(m_addonGroup);
 
     connect(m_addonModeCombo, &QComboBox::currentIndexChanged, this, [this](int) {
         applyAddonMode();
@@ -412,6 +432,8 @@ void AccountDialog::buildAddonSection(QVBoxLayout *parent)
         if (answer == QMessageBox::Yes)
             emit resyncAddonSettingsRequested(m_accountId);
     });
+
+    return page;
 }
 
 void AccountDialog::applyAddonMode()
@@ -566,10 +588,10 @@ void AccountDialog::startSizeScan()
     });
 }
 
-void AccountDialog::buildEnvSection(QVBoxLayout *parent)
+QWidget *AccountDialog::buildEnvPage()
 {
-    auto *group = new QGroupBox("Environment Variables");
-    auto *box = new QVBoxLayout(group);
+    auto *page = new QWidget;
+    auto *box = new QVBoxLayout(page);
 
     m_envTable = new QTableWidget(0, 2);
     m_envTable->setHorizontalHeaderLabels({"Name", "Value"});
@@ -597,7 +619,6 @@ void AccountDialog::buildEnvSection(QVBoxLayout *parent)
     btnRow->addWidget(removeBtn);
     btnRow->addStretch();
     box->addLayout(btnRow);
-    parent->addWidget(group);
 
     connect(addBtn, &QPushButton::clicked, this, [this]() {
         QMap<QString, QString> added;
@@ -630,6 +651,8 @@ void AccountDialog::buildEnvSection(QVBoxLayout *parent)
         m_envVars.remove(item->text());
         refreshEnvTable();
     });
+
+    return page;
 }
 
 void AccountDialog::refreshEnvTable()
@@ -677,7 +700,7 @@ void AccountDialog::setAccount(const AccountManager::Account &account)
         m_haveAccountSelections = true;
         rebuildAddonTable();
         applyAddonMode();
-        m_addonGroup->setVisible(!account.isMain);
+        setAddonTabVisible(!account.isMain);
     }
 
     m_apiKeyEdit->setText(account.apiKey);
@@ -694,7 +717,7 @@ void AccountDialog::setAccount(const AccountManager::Account &account)
 void AccountDialog::setSteamMode(const QString &defaultCommand)
 {
     m_steamMode = true;
-    m_addonGroup->setVisible(false);
+    setAddonTabVisible(false);
     m_launchCommandEdit->setVisible(true);
     m_launchCommandLabel->setVisible(true);
     m_launchCommandEdit->setText(defaultCommand);
