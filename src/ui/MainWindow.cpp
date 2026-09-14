@@ -859,6 +859,22 @@ void MainWindow::launchSteamAccount(const QString &accountId)
     QProcess::startDetached("env", wrappedArgs);
 }
 
+// Carries across the fields the edit dialog does not manage. Anything not listed
+// here is owned by the dialog: name, extraArgs, envVars, addon settings, API key
+// and display toggles, sidecars, and the Steam launch command.
+static AccountManager::Account mergeEditedAccount(const AccountManager::Account &original,
+                                                   AccountManager::Account edited)
+{
+    edited.id = original.id;
+    edited.email = original.email;
+    edited.password = original.password;
+    edited.localDatPath = original.localDatPath;
+    edited.gfxSettingsPath = original.gfxSettingsPath;
+    edited.multiLaunch = original.multiLaunch;   // ticked in the launch menu, not here
+    edited.lastPlayed = original.lastPlayed;     // recorded when a session ends
+    return edited;
+}
+
 void MainWindow::onEditAccount()
 {
     auto items = m_accountList->selectedItems();
@@ -872,19 +888,16 @@ void MainWindow::onEditAccount()
     if (!m_gw2ExePath.isEmpty())
         dlg.setAddonsDir(QFileInfo(m_gw2ExePath).absolutePath() + "/addons");
     connect(&dlg, &AccountDialog::resyncAddonSettingsRequested, this,
-            [this](const QString &id) { onResyncAddonSettings(id); });
+            [this, &dlg, acct](const QString &id) {
+                // Resync copies whatever the account's selections currently say,
+                // so save what is on screen first — otherwise the button would
+                // act on the previously saved list rather than the visible one.
+                m_accountManager->updateAccount(mergeEditedAccount(acct, dlg.account()));
+                onResyncAddonSettings(id);
+            });
     dlg.setAccount(acct);
     if (dlg.exec() == QDialog::Accepted) {
-        auto updated = dlg.account();
-        updated.id = acct.id; // preserve the original ID
-        // Preserve fields the edit dialog doesn't manage
-        updated.email = acct.email;
-        updated.password = acct.password;
-        updated.localDatPath = acct.localDatPath;
-        updated.gfxSettingsPath = acct.gfxSettingsPath;
-        // extraArgs is managed by the dialog now
-        // envVars is managed by the dialog now
-        // isSteam and launchCommand are managed by the dialog
+        auto updated = mergeEditedAccount(acct, dlg.account());
         if (m_accountManager->updateAccount(updated)) {
             appendLog(QString("Updated account: %1").arg(updated.displayName));
             fetchApiData();

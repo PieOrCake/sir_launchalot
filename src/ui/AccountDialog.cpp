@@ -394,7 +394,8 @@ void AccountDialog::buildAddonSection(QVBoxLayout *parent)
         }
         auto answer = QMessageBox::question(this, "Resync Addon Settings",
             "Replace this alt's addon settings with the main account's current ones?\n\n"
-            "Anything you have changed on this alt will be lost.");
+            "The selections shown here are saved first. Anything you have changed "
+            "on this alt will be lost.");
         if (answer == QMessageBox::Yes)
             emit resyncAddonSettingsRequested(m_accountId);
     });
@@ -476,7 +477,21 @@ void AccountDialog::rebuildAddonTable()
         combo->addItem("(none)", QString());
         for (const QString &d : m_dataDirChoices)
             combo->addItem(d, d);
-        const QString want = isChosen ? sel.dataDir : addon.dataDir;
+        QString want = isChosen ? sel.dataDir : addon.dataDir;
+        // A stored folder that belongs to a *different* installed addon is not a
+        // deliberate choice — it is what the old detection wrote when an addon
+        // had no folder of its own yet, and it seeds the alt with the wrong
+        // addon's settings. Fall back to this addon's own folder, visibly, so it
+        // can be corrected before saving. A folder no other addon claims is left
+        // exactly as the user set it.
+        if (!want.isEmpty() && want != addon.dataDir) {
+            for (const auto &other : m_addons) {
+                if (other.dll != addon.dll && other.dataDir == want) {
+                    want = addon.dataDir;
+                    break;
+                }
+            }
+        }
         // Keep the longest folder name from dictating the column width; the
         // drop-down list itself is still shown in full.
         combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);

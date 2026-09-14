@@ -49,6 +49,10 @@ public:
     static QString formatSize(qint64 bytes);
 
 private:
+    // The folder whose name matches dllName outright, ignoring case and
+    // punctuation. Empty when there is no match or more than one.
+    static QString exactDataDir(const QString &dllName, const QStringList &candidateDirs);
+
     // Lowercase, stripped of anything that is not a letter or digit, so that
     // "Radial_Menus", "RadialMenus" and "radial menus" all compare equal.
     static QString normalise(const QString &s);

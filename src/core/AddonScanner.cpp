@@ -5,6 +5,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QLocale>
+#include <QSet>
 
 const QStringList &AddonScanner::reservedDirs()
 {
@@ -58,6 +59,22 @@ QStringList AddonScanner::namesInBinary(const QString &dllPath, const QStringLis
             hits.append(name);
     }
     return hits;
+}
+
+QString AddonScanner::exactDataDir(const QString &dllName, const QStringList &candidateDirs)
+{
+    QString stem = dllName;
+    if (stem.endsWith(".dll", Qt::CaseInsensitive))
+        stem.chop(4);
+    const QString key = normalise(stem);
+    if (key.isEmpty()) return {};
+
+    QStringList matches;
+    for (const QString &dir : candidateDirs) {
+        if (normalise(dir) == key)
+            matches.append(dir);
+    }
+    return matches.size() == 1 ? matches.first() : QString();
 }
 
 QString AddonScanner::detectDataDir(const QString &addonsDir, const QString &dllName,
@@ -127,8 +144,36 @@ QList<AddonScanner::AddonInfo> AddonScanner::scan(const QString &addonsDir)
         AddonInfo info;
         info.dll = dll;
         info.displayName = prettyName(dll);
-        info.dataDir = detectDataDir(addonsDir, dll, candidates);
         out.append(info);
+    }
+
+    // Two passes, because the relaxed rules below are only safe once the
+    // obvious owners have taken their folders.
+    //
+    // An addon that matches a folder by name outright owns it, and that folder
+    // is then off the table for every other addon. Without this, an addon whose
+    // own folder does not exist yet — a freshly installed one that has not run —
+    // can be handed a *different* addon's folder by the prefix rule that
+    // legitimately maps TaimiHUD.dll to Taimi/. SerenadeSpike.dll took
+    // Serenade.dll's folder exactly that way, and the alt was seeded with the
+    // wrong addon's settings.
+    QSet<QString> claimed;
+    for (auto &info : out) {
+        const QString exact = exactDataDir(info.dll, candidates);
+        if (exact.isEmpty() || claimed.contains(exact)) continue;
+        info.dataDir = exact;
+        claimed.insert(exact);
+    }
+
+    QStringList unclaimed;
+    for (const QString &dir : candidates) {
+        if (!claimed.contains(dir))
+            unclaimed.append(dir);
+    }
+
+    for (auto &info : out) {
+        if (!info.dataDir.isEmpty()) continue;
+        info.dataDir = detectDataDir(addonsDir, info.dll, unclaimed);
     }
 
     std::sort(out.begin(), out.end(), [](const AddonInfo &a, const AddonInfo &b) {
