@@ -39,6 +39,7 @@ private slots:
     void onSettings();
     void onToggleLog();
     void onAccountContextMenu(const QPoint &pos);
+    bool selectAccountRow(const QString &id);
     void onInstanceStarted(const QString &accountId);
     void onInstanceStopped(const QString &accountId);
     void onInstanceError(const QString &accountId, const QString &error);

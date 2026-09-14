@@ -1059,6 +1059,21 @@ void MainWindow::onToggleLog()
     }
 }
 
+// Selects the row for an account or external app by id, looking it up now
+// rather than trusting a pointer taken earlier. Returns false when the item has
+// gone, in which case the caller should do nothing.
+bool MainWindow::selectAccountRow(const QString &id)
+{
+    for (int i = 0; i < m_accountList->count(); ++i) {
+        auto *item = m_accountList->item(i);
+        if (item && item->data(Qt::UserRole).toString() == id) {
+            m_accountList->setCurrentRow(i);
+            return true;
+        }
+    }
+    return false;
+}
+
 void MainWindow::onAccountContextMenu(const QPoint &pos)
 {
     auto *item = m_accountList->itemAt(pos);
@@ -1067,6 +1082,10 @@ void MainWindow::onAccountContextMenu(const QPoint &pos)
     QString id = item->data(Qt::UserRole).toString();
     QString itemType = item->data(Qt::UserRole + 1).toString();
 
+    // Only the id is captured below, never the item. menu.exec() runs a nested
+    // event loop, and refreshAccountList() clears the list — which an arriving
+    // API reply or an exiting game will do — so any item pointer taken now is
+    // liable to be dangling by the time an action fires.
     QMenu menu(this);
 
     if (itemType == "externalApp") {
@@ -1085,23 +1104,20 @@ void MainWindow::onAccountContextMenu(const QPoint &pos)
             bool hasRunning = !m_processManager->runningAccounts().isEmpty();
             auto *setupAction = menu.addAction("Setup Account (re-capture credentials)");
             setupAction->setEnabled(!hasRunning);
-            connect(setupAction, &QAction::triggered, this, [this, item]() {
-                m_accountList->setCurrentItem(item);
-                onSetupAccount();
+            connect(setupAction, &QAction::triggered, this, [this, id]() {
+                if (selectAccountRow(id)) onSetupAccount();
             });
             menu.addSeparator();
         }
 
         auto *editAction = menu.addAction("Edit");
-        connect(editAction, &QAction::triggered, this, [this, item]() {
-            m_accountList->setCurrentItem(item);
-            onEditAccount();
+        connect(editAction, &QAction::triggered, this, [this, id]() {
+            if (selectAccountRow(id)) onEditAccount();
         });
 
         auto *removeAction = menu.addAction("Remove");
-        connect(removeAction, &QAction::triggered, this, [this, item]() {
-            m_accountList->setCurrentItem(item);
-            onRemoveAccount();
+        connect(removeAction, &QAction::triggered, this, [this, id]() {
+            if (selectAccountRow(id)) onRemoveAccount();
         });
     }
 
