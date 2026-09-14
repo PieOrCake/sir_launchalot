@@ -23,9 +23,76 @@ static AccountManager::AddonMode addonModeFromString(const QString &s)
     return AccountManager::AddonMode::All;
 }
 
+// Environment variable names are letters, digits and underscores, and may not
+// start with a digit.
+static bool isValidEnvName(const QString &name)
+{
+    if (name.isEmpty() || name.at(0).isDigit()) return false;
+    for (const QChar &c : name) {
+        if (!c.isLetterOrNumber() && c != '_') return false;
+        if (c.unicode() > 127) return false;   // keep it to plain ASCII
+    }
+    return true;
+}
+
 const QStringList &AccountManager::managedEnvVars()
 {
     static const QStringList vars = {"WINEPREFIX", "PROTONPATH", "GAMEID", "STORE"};
+    return vars;
+}
+
+QMap<QString, QString> AccountManager::parseEnvAssignments(const QString &text,
+                                                            QStringList *errors)
+{
+    QMap<QString, QString> vars;
+
+    const QStringList lines = text.split('\n');
+    for (const QString &raw : lines) {
+        QString line = raw.trimmed();
+        if (line.isEmpty() || line.startsWith('#'))
+            continue;
+
+        // Guides and scripts are usually copied complete with the export.
+        if (line.startsWith(QLatin1String("export "), Qt::CaseSensitive))
+            line = line.mid(7).trimmed();
+
+        const int eq = line.indexOf('=');
+        if (eq < 0) {
+            if (errors) *errors << QString("\"%1\" is not NAME=value.").arg(line);
+            continue;
+        }
+
+        const QString name = line.left(eq).trimmed();
+        QString value = line.mid(eq + 1).trimmed();
+
+        // A pasted value often arrives quoted; the quotes are shell syntax, not
+        // part of the value.
+        if (value.size() >= 2
+            && ((value.startsWith('"') && value.endsWith('"'))
+                || (value.startsWith('\'') && value.endsWith('\'')))) {
+            value = value.mid(1, value.size() - 2);
+        }
+
+        if (name.isEmpty()) {
+            if (errors) *errors << QString("\"%1\" has no name before the =.").arg(line);
+            continue;
+        }
+        if (!isValidEnvName(name)) {
+            if (errors)
+                *errors << QString("\"%1\" is not a usable variable name — use letters, "
+                                   "digits and underscores, not starting with a digit.").arg(name);
+            continue;
+        }
+        if (managedEnvVars().contains(name, Qt::CaseInsensitive)) {
+            if (errors)
+                *errors << QString("%1 is set by Sir Launchalot and would break this "
+                                   "account's Wine prefix if changed here.").arg(name);
+            continue;
+        }
+
+        vars.insert(name, value);
+    }
+
     return vars;
 }
 

@@ -8,6 +8,7 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPlainTextEdit>
 #include <QPointer>
 #include <QProcess>
 #include <QPushButton>
@@ -86,27 +87,37 @@ static bool editSidecar(AccountManager::SidecarProgram &sc, QWidget *parent,
     return true;
 }
 
-// Edit one environment variable. Returns false if cancelled or invalid.
-static bool editEnvVar(QString &name, QString &value, QWidget *parent)
+// Enter environment variables the way they are written everywhere else —
+// "NAME=value". Add takes several lines at once, since they are usually copied
+// in blocks; Edit takes the single line it was opened on. Returns false if
+// cancelled, otherwise fills parsed with everything that was understood.
+static bool editEnvVars(QMap<QString, QString> &parsed, const QString &initial,
+                        bool allowMultiple, QWidget *parent)
 {
     QDialog dlg(parent);
-    dlg.setWindowTitle(name.isEmpty() ? "Add Variable" : "Edit Variable");
-    dlg.setMinimumWidth(420);
+    dlg.setWindowTitle(allowMultiple ? "Add Variables" : "Edit Variable");
+    dlg.setMinimumWidth(460);
     auto *layout = new QVBoxLayout(&dlg);
-    auto *form = new QFormLayout;
 
-    auto *nameEdit = new QLineEdit(name);
-    nameEdit->setPlaceholderText("e.g. DXVK_HUD");
-    form->addRow("Name:", nameEdit);
-
-    auto *valueEdit = new QLineEdit(value);
-    valueEdit->setPlaceholderText("e.g. fps,memory");
-    form->addRow("Value:", valueEdit);
-    layout->addLayout(form);
+    QPlainTextEdit *multi = nullptr;
+    QLineEdit *single = nullptr;
+    if (allowMultiple) {
+        multi = new QPlainTextEdit(initial);
+        multi->setPlaceholderText("PULSE_SINK=gw2_seat1\nDXVK_HUD=fps,memory");
+        multi->setMinimumHeight(90);
+        multi->setMaximumHeight(120);   // room to paste a block, not a wall of empty
+        layout->addWidget(multi);
+    } else {
+        single = new QLineEdit(initial);
+        single->setPlaceholderText("PULSE_SINK=gw2_seat1");
+        layout->addWidget(single);
+    }
 
     auto *note = new QLabel(
-        QString("Set before the game starts. %1 are set by the launcher and cannot "
-                "be overridden here.").arg(AccountManager::managedEnvVars().join(", ")));
+        QString("%1A leading \"export\" and quotes around the value are ignored, so you "
+                "can paste straight from a guide. %2 are set by the launcher.")
+            .arg(allowMultiple ? "One per line. " : "",
+                 AccountManager::managedEnvVars().join(", ")));
     note->setWordWrap(true);
     note->setStyleSheet("color: gray; font-size: 11px;");
     layout->addWidget(note);
@@ -116,23 +127,25 @@ static bool editEnvVar(QString &name, QString &value, QWidget *parent)
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
     layout->addWidget(buttons);
 
-    if (dlg.exec() != QDialog::Accepted) return false;
+    // Anything unusable keeps the dialog open with the text intact, so a typo in
+    // one of several pasted lines does not throw the rest away.
+    while (dlg.exec() == QDialog::Accepted) {
+        const QString text = multi ? multi->toPlainText() : single->text();
+        QStringList errors;
+        parsed = AccountManager::parseEnvAssignments(text, &errors);
 
-    const QString newName = nameEdit->text().trimmed();
-    if (newName.isEmpty()) {
-        QMessageBox::warning(parent, "Environment Variable", "Name is required.");
-        return false;
+        if (!errors.isEmpty()) {
+            QMessageBox::warning(parent, "Environment Variables", errors.join("\n\n"));
+            continue;
+        }
+        if (parsed.isEmpty()) {
+            QMessageBox::warning(parent, "Environment Variables",
+                "Enter a variable as NAME=value, for example PULSE_SINK=gw2_seat1.");
+            continue;
+        }
+        return true;
     }
-    if (AccountManager::managedEnvVars().contains(newName, Qt::CaseInsensitive)) {
-        QMessageBox::warning(parent, "Environment Variable",
-            QString("%1 is set by Sir Launchalot and would break this account's "
-                    "Wine prefix if changed here.").arg(newName));
-        return false;
-    }
-
-    name = newName;
-    value = valueEdit->text();
-    return true;
+    return false;
 }
 
 AccountDialog::AccountDialog(QWidget *parent)
@@ -587,23 +600,25 @@ void AccountDialog::buildEnvSection(QVBoxLayout *parent)
     parent->addWidget(group);
 
     connect(addBtn, &QPushButton::clicked, this, [this]() {
-        QString name, value;
-        if (editEnvVar(name, value, this)) {
-            m_envVars.insert(name, value);
-            refreshEnvTable();
-        }
+        QMap<QString, QString> added;
+        if (!editEnvVars(added, QString(), true, this)) return;
+        for (auto it = added.constBegin(); it != added.constEnd(); ++it)
+            m_envVars.insert(it.key(), it.value());
+        refreshEnvTable();
     });
 
     auto editCurrent = [this]() {
-        const int row = m_envTable->currentRow();
-        auto *item = m_envTable->item(row, 0);
+        auto *item = m_envTable->item(m_envTable->currentRow(), 0);
         if (!item) return;
-        QString name = item->text();
-        QString value = m_envVars.value(name);
-        const QString original = name;
-        if (!editEnvVar(name, value, this)) return;
-        if (name != original) m_envVars.remove(original);   // renamed
-        m_envVars.insert(name, value);
+        const QString original = item->text();
+
+        QMap<QString, QString> edited;
+        if (!editEnvVars(edited, original + "=" + m_envVars.value(original), false, this))
+            return;
+
+        m_envVars.remove(original);   // may have been renamed
+        for (auto it = edited.constBegin(); it != edited.constEnd(); ++it)
+            m_envVars.insert(it.key(), it.value());
         refreshEnvTable();
     };
     connect(editBtn, &QPushButton::clicked, this, editCurrent);

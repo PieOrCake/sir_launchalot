@@ -5,6 +5,7 @@
 #include <QString>
 #include <QList>
 #include <QDateTime>
+#include <QMap>
 #include <QJsonObject>
 
 class AccountManager : public QObject
@@ -71,6 +72,13 @@ public:
     // with one of these names is ignored — WINEPREFIX in particular is what keeps
     // accounts apart.
     static const QStringList &managedEnvVars();
+
+    // Reads environment variables written the way people actually copy them —
+    // "NAME=value", one per line. Tolerates a leading "export", surrounding
+    // quotes on the value, blank lines and # comments. Anything it cannot use is
+    // described in errors (when given) rather than silently dropped.
+    static QMap<QString, QString> parseEnvAssignments(const QString &text,
+                                                      QStringList *errors = nullptr);
 
     // When an account was last seen: the later of the API's last_modified and
     // the end of a session this launcher watched. Invalid when neither is known.
