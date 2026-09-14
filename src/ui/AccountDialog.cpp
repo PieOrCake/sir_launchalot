@@ -94,7 +94,9 @@ AccountDialog::AccountDialog(QWidget *parent)
 void AccountDialog::setupUi()
 {
     auto *layout = new QVBoxLayout(this);
-    layout->setSizeConstraint(QLayout::SetFixedSize);
+    // Minimum rather than fixed: the addon table is the one part of this dialog
+    // worth widening, and a fixed size leaves no way to read a clipped column.
+    layout->setSizeConstraint(QLayout::SetMinimumSize);
 
     auto *form = new QFormLayout;
     m_nameEdit = new QLineEdit;
@@ -205,6 +207,22 @@ void AccountDialog::setupUi()
     layout->addWidget(buttons);
 }
 
+// A table that asks for room to show about eight rows, but will shrink to four
+// when the dialog has to fit a short screen. QTableWidget's own size hint does
+// not grow with its contents, so the dialog would otherwise open cramped.
+// No Q_OBJECT, so no moc pass is needed for it.
+class AddonTable : public QTableWidget
+{
+public:
+    using QTableWidget::QTableWidget;
+    QSize sizeHint() const override
+    {
+        QSize hint = QTableWidget::sizeHint();
+        hint.setHeight(qMax(hint.height(), 300));
+        return hint;
+    }
+};
+
 // Column layout of the addon picker.
 enum AddonColumn { ColAddon = 0, ColCopySettings, ColDataDir, ColSize, ColCount };
 
@@ -225,17 +243,36 @@ void AccountDialog::buildAddonSection(QVBoxLayout *parent)
     auto *pick = new QVBoxLayout(m_addonPicker);
     pick->setContentsMargins(0, 0, 0, 0);
 
-    m_addonTable = new QTableWidget(0, ColCount);
+    m_addonTable = new AddonTable(0, ColCount);
     m_addonTable->setHorizontalHeaderLabels({"Addon", "Copy settings", "Settings folder", "Size"});
-    m_addonTable->horizontalHeader()->setStretchLastSection(false);
-    m_addonTable->horizontalHeader()->setSectionResizeMode(ColAddon, QHeaderView::Stretch);
     m_addonTable->verticalHeader()->setVisible(false);
     m_addonTable->setSelectionMode(QAbstractItemView::NoSelection);
     m_addonTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_addonTable->setMinimumHeight(260);
-    m_addonTable->setMaximumHeight(260);
-    m_addonTable->setMinimumWidth(560);
-    pick->addWidget(m_addonTable);
+    // Kept modest so the dialog still fits a laptop screen: it expands into
+    // whatever height the window is given, and the window is resizable.
+    m_addonTable->setMinimumHeight(150);
+    m_addonTable->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+
+    // The addon name absorbs the slack; the other three are draggable, starting
+    // wide enough for their content — a size reads "785.6 MB", and the longest
+    // settings folder name is much wider than the column needs to be.
+    const QFontMetrics fm = m_addonTable->fontMetrics();
+    const int pad = 28;   // checkbox indicator, sort arrow and cell margins
+    auto *header = m_addonTable->horizontalHeader();
+    header->setStretchLastSection(false);
+    header->setSectionResizeMode(ColAddon, QHeaderView::Stretch);
+    header->setSectionResizeMode(ColCopySettings, QHeaderView::Interactive);
+    header->setSectionResizeMode(ColDataDir, QHeaderView::Interactive);
+    header->setSectionResizeMode(ColSize, QHeaderView::Interactive);
+    header->setMinimumSectionSize(40);
+    m_addonTable->setColumnWidth(ColCopySettings, fm.horizontalAdvance("Copy settings") + pad);
+    m_addonTable->setColumnWidth(ColDataDir, 170);
+    m_addonTable->setColumnWidth(ColSize, fm.horizontalAdvance("8888.8 MB") + pad);
+
+    // Enough width for the name column to be useful once the rest have taken
+    // theirs, without forcing the whole dialog wider than it needs to be.
+    m_addonTable->setMinimumWidth(620);
+    pick->addWidget(m_addonTable, 1);
 
     m_copyNexusLayoutCheck = new QCheckBox("Copy Nexus window layout and keybinds from main");
     m_copyNexusLayoutCheck->setChecked(true);
@@ -285,9 +322,14 @@ void AccountDialog::applyAddonMode()
 {
     const bool selected = m_addonModeCombo->currentData().toInt()
                           == static_cast<int>(AccountManager::AddonMode::Selected);
+    const bool wasVisible = m_addonPicker->isVisible();
     m_addonPicker->setVisible(selected);
     if (selected && m_addonTable->rowCount() == 0)
         rebuildAddonTable();
+    // Shrink back when the table goes away; growing is left to the user so a
+    // dialog they have widened stays widened.
+    if (wasVisible && !selected)
+        adjustSize();
 }
 
 void AccountDialog::setAddonsDir(const QString &dir)
@@ -324,6 +366,11 @@ void AccountDialog::rebuildAddonTable()
         }
     }
 
+    // Drop the rows outright rather than repopulating them. clearContents()
+    // leaves cell widgets behind, and the table is rebuilt several times as the
+    // account and the folder sizes arrive — each pass would strand another
+    // drop-down in the viewport.
+    m_addonTable->setRowCount(0);
     m_addonTable->setRowCount(m_addons.size());
     for (int r = 0; r < m_addons.size(); ++r) {
         const auto &addon = m_addons[r];
@@ -348,6 +395,10 @@ void AccountDialog::rebuildAddonTable()
         for (const QString &d : m_dataDirChoices)
             combo->addItem(d, d);
         const QString want = isChosen ? sel.dataDir : addon.dataDir;
+        // Keep the longest folder name from dictating the column width; the
+        // drop-down list itself is still shown in full.
+        combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        combo->setMinimumContentsLength(12);
         const int idx = combo->findData(want);
         combo->setCurrentIndex(idx >= 0 ? idx : 0);
         if (addon.dataDir.isEmpty() && want.isEmpty()) {
@@ -358,6 +409,7 @@ void AccountDialog::rebuildAddonTable()
 
         auto *sizeItem = new QTableWidgetItem;
         sizeItem->setFlags(Qt::ItemIsEnabled);
+        sizeItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
         m_addonTable->setItem(r, ColSize, sizeItem);
 
         connect(combo, &QComboBox::currentIndexChanged, this, [this, r](int) {
@@ -369,9 +421,6 @@ void AccountDialog::rebuildAddonTable()
                                         : AddonScanner::formatSize(m_dataDirSizes.value(dir, -1)));
         });
     }
-
-    m_addonTable->resizeColumnsToContents();
-    m_addonTable->horizontalHeader()->setSectionResizeMode(ColAddon, QHeaderView::Stretch);
 
     // Fill in whatever sizes are already known.
     for (int r = 0; r < m_addonTable->rowCount(); ++r) {
