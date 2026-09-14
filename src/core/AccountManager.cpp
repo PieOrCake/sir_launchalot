@@ -6,6 +6,23 @@
 #include <QJsonDocument>
 #include <QStandardPaths>
 
+static QString addonModeToString(AccountManager::AddonMode mode)
+{
+    switch (mode) {
+    case AccountManager::AddonMode::Off:      return QStringLiteral("off");
+    case AccountManager::AddonMode::Selected: return QStringLiteral("selected");
+    case AccountManager::AddonMode::All:      break;
+    }
+    return QStringLiteral("all");
+}
+
+static AccountManager::AddonMode addonModeFromString(const QString &s)
+{
+    if (s == QLatin1String("off"))      return AccountManager::AddonMode::Off;
+    if (s == QLatin1String("selected")) return AccountManager::AddonMode::Selected;
+    return AccountManager::AddonMode::All;
+}
+
 AccountManager::AccountManager(QObject *parent)
     : QObject(parent)
 {
@@ -450,7 +467,21 @@ QJsonObject AccountManager::accountToJson(const Account &account) const
     obj["password"] = account.password;
     obj["localDatPath"] = account.localDatPath;
     obj["gfxSettingsPath"] = account.gfxSettingsPath;
-    obj["enableAddons"] = account.enableAddons;
+    // enableAddons is still written so an older build reading this config keeps
+    // working: it sees addons on unless the alt has them switched off entirely.
+    obj["enableAddons"] = account.addonMode != AddonMode::Off;
+    obj["addonMode"] = addonModeToString(account.addonMode);
+    obj["copyNexusLayout"] = account.copyNexusLayout;
+
+    QJsonArray addonsArr;
+    for (const auto &sel : account.addonSelections) {
+        QJsonObject selObj;
+        selObj["dll"] = sel.dll;
+        selObj["copySettings"] = sel.copySettings;
+        selObj["dataDir"] = sel.dataDir;
+        addonsArr.append(selObj);
+    }
+    obj["addonSelections"] = addonsArr;
 
     QJsonArray argsArr;
     for (const auto &arg : account.extraArgs) {
@@ -500,6 +531,22 @@ AccountManager::Account AccountManager::accountFromJson(const QJsonObject &obj) 
     acct.localDatPath = obj.value("localDatPath").toString();
     acct.gfxSettingsPath = obj.value("gfxSettingsPath").toString();
     acct.enableAddons = obj.value("enableAddons").toBool(true);
+    // Configs written before per-addon selection existed only have the boolean.
+    acct.addonMode = obj.contains("addonMode")
+                         ? addonModeFromString(obj.value("addonMode").toString())
+                         : (acct.enableAddons ? AddonMode::All : AddonMode::Off);
+    acct.copyNexusLayout = obj.value("copyNexusLayout").toBool(true);
+
+    const QJsonArray addonsArr = obj.value("addonSelections").toArray();
+    for (const auto &val : addonsArr) {
+        const QJsonObject selObj = val.toObject();
+        AddonSelection sel;
+        sel.dll = selObj.value("dll").toString();
+        if (sel.dll.isEmpty()) continue;
+        sel.copySettings = selObj.value("copySettings").toBool(true);
+        sel.dataDir = selObj.value("dataDir").toString();
+        acct.addonSelections.append(sel);
+    }
 
     QJsonArray argsArr = obj.value("extraArgs").toArray();
     for (const auto &val : argsArr) {

@@ -177,17 +177,37 @@ bool ProcessManager::launchAccount(const QString &accountId,
         QString clonePrefix = accountDir + "/prefix";
         QDir().mkpath(clonePrefix);
 
-        emit instanceOutput(accountId, QString("Syncing prefix from %1 ...\n").arg(basePrefix));
-        QProcess rsync;
-        rsync.setProcessChannelMode(QProcess::MergedChannels);
-        rsync.start("rsync", {
+        // Work out the install layout up front: it decides what the clone must
+        // leave alone as well as where the alt's game files end up.
+        const QString sourceGameDir = QFileInfo(exePath).absolutePath();
+        const bool gameInPrefix = exePath.startsWith(basePrefix + "/");
+        const QString relGameDir = gameInPrefix
+            ? QFileInfo(exePath.mid(basePrefix.length() + 1)).path()
+            : QString();
+        const bool selectiveAddons = acct.addonMode == AccountManager::AddonMode::Selected;
+
+        QStringList cloneArgs = {
             "-a", "--delete",
             "--exclude", "Gw2.dat",
             "--exclude", "Gw2.tmp",
-            "--exclude", "Gw2-64.tmp",
-            basePrefix + "/",
-            clonePrefix + "/"
-        });
+            "--exclude", "Gw2-64.tmp"
+        };
+        // When the alt curates its own addon set and the game lives inside the
+        // prefix, keep the game's addons folder out of the sync altogether.
+        // Anchored excludes are also protected from --delete, so the alt's addon
+        // symlinks and its own settings survive every relaunch instead of being
+        // overwritten by main's.
+        if (gameInPrefix && selectiveAddons) {
+            const QString base = (relGameDir == ".") ? QString() : "/" + relGameDir;
+            cloneArgs << "--exclude" << (base + "/addons/");
+            cloneArgs << "--exclude" << (base + "/d3d11.dll");
+        }
+        cloneArgs << basePrefix + "/" << clonePrefix + "/";
+
+        emit instanceOutput(accountId, QString("Syncing prefix from %1 ...\n").arg(basePrefix));
+        QProcess rsync;
+        rsync.setProcessChannelMode(QProcess::MergedChannels);
+        rsync.start("rsync", cloneArgs);
         if (!rsync.waitForFinished(120000)) {
             emit instanceError(accountId, "rsync timed out cloning prefix");
             return false;
@@ -204,25 +224,27 @@ bool ProcessManager::launchAccount(const QString &accountId,
         // so the rsync above already produced a private copy — strip addons from it
         // and point Gw2.dat back at the base prefix. Faugus, Heroic and Steam keep
         // the game in a separate folder, so the clone holds no game files at all;
-        // when addons are disabled we build a stripped copy of the game folder in
-        // the account's own data dir, otherwise the shared original is used as-is.
-        const QString sourceGameDir = QFileInfo(exePath).absolutePath();
-        const bool gameInPrefix = exePath.startsWith(basePrefix + "/");
-
+        // unless the alt runs main's full addon set we build a private copy of the
+        // game folder in the account's own data dir.
         if (gameInPrefix) {
-            const QString relExeDir = QFileInfo(exePath.mid(basePrefix.length() + 1)).path();
-            const QString cloneGameDir = (relExeDir == ".") ? clonePrefix
-                                                            : clonePrefix + "/" + relExeDir;
-            if (!acct.enableAddons) {
+            const QString cloneGameDir = (relGameDir == ".") ? clonePrefix
+                                                             : clonePrefix + "/" + relGameDir;
+            if (acct.addonMode == AccountManager::AddonMode::Off) {
                 stripAddons(accountId, cloneGameDir);
             }
             // Symlink Gw2.dat from the base prefix so alts share main's updated
             // game data instead of each needing their own ~80 GB copy.
             linkGw2Dat(accountId, sourceGameDir, cloneGameDir);
+            if (selectiveAddons) {
+                prepareSelectedAddons(accountId, sourceGameDir, cloneGameDir, acct, false);
+            }
             altGameDir = cloneGameDir;
-        } else if (!acct.enableAddons) {
+        } else if (acct.addonMode != AccountManager::AddonMode::All) {
             altGameDir = prepareStrippedGameDir(accountId, sourceGameDir);
             if (altGameDir.isEmpty()) return false;
+            if (selectiveAddons) {
+                prepareSelectedAddons(accountId, sourceGameDir, altGameDir, acct, false);
+            }
         }
 
         // Find the GW2 user data dir in the clone
@@ -815,6 +837,189 @@ void ProcessManager::linkGw2Dat(const QString &accountId, const QString &sourceG
     } else {
         emit instanceError(accountId, "Failed to symlink Gw2.dat into " + destGameDir);
     }
+}
+
+// Nexus's own shared state. imgui.ini holds every addon's window position and
+// size, InputBinds.json every addon's keybinds — neither lives with the addon it
+// belongs to, so they are seeded as one unit.
+static const QStringList kNexusLayoutFiles = {
+    "imgui.ini", "InputBinds.json", "Settings.json"
+};
+
+// Points dest at src, replacing whatever is already there. Returns true when
+// dest ends up as a link to src.
+bool ProcessManager::linkFile(const QString &accountId, const QString &src,
+                              const QString &dest)
+{
+    QFileInfo destInfo(dest);
+    if (destInfo.isSymLink() && destInfo.symLinkTarget() == src)
+        return true;   // already correct
+    // exists() is false for a dangling symlink, so test for the link as well.
+    if (destInfo.exists() || destInfo.isSymLink())
+        QFile::remove(dest);
+    if (QFile::link(src, dest))
+        return true;
+    emit instanceError(accountId, "Failed to link " + dest);
+    return false;
+}
+
+bool ProcessManager::copyTree(const QString &accountId, const QString &src,
+                              const QString &dest)
+{
+    QProcess rsync;
+    rsync.setProcessChannelMode(QProcess::MergedChannels);
+    rsync.start("rsync", {"-a", "--delete", src + "/", dest + "/"});
+    if (!rsync.waitForFinished(600000)) {
+        emit instanceError(accountId, "rsync timed out copying " + src);
+        return false;
+    }
+    if (rsync.exitCode() != 0) {
+        emit instanceError(accountId, "rsync failed copying " + src + ": "
+                                          + QString(rsync.readAll()));
+        return false;
+    }
+    return true;
+}
+
+void ProcessManager::prepareSelectedAddons(const QString &accountId,
+                                            const QString &sourceGameDir,
+                                            const QString &destGameDir,
+                                            const AccountManager::Account &acct,
+                                            bool force)
+{
+    const QString srcAddons = sourceGameDir + "/addons";
+    const QString dstAddons = destGameDir + "/addons";
+
+    if (!QDir(srcAddons).exists()) {
+        emit instanceOutput(accountId,
+            "No addons folder on the main install — nothing to link.\n");
+        return;
+    }
+
+    // The first time an alt uses per-addon selection its addons folder may still
+    // hold a full copy left by the old all-or-nothing behaviour. Clear it once so
+    // the folder starts from a known state; the marker keeps later launches from
+    // wiping the settings the alt has built up since.
+    const QString marker = dstAddons + "/.sir-launchalot";
+    const bool firstRun = !QFile::exists(marker);
+    if (firstRun && QDir(dstAddons).exists()) {
+        QDir(dstAddons).removeRecursively();
+    }
+    if (!QDir().mkpath(dstAddons)) {
+        emit instanceError(accountId, "Could not create addons folder: " + dstAddons);
+        return;
+    }
+
+    emit instanceOutput(accountId, QString("Selected addons — linking into %1\n").arg(dstAddons));
+
+    // Nexus itself is d3d11.dll in the game root, not an entry in addons/.
+    linkFile(accountId, sourceGameDir + "/d3d11.dll", destGameDir + "/d3d11.dll");
+
+    QSet<QString> wanted;
+    for (const auto &sel : acct.addonSelections)
+        wanted.insert(sel.dll);
+
+    // Drop links (and any stale copies) for addons that are no longer ticked.
+    // QDir::System catches links whose target has since been uninstalled.
+    const QStringList present = QDir(dstAddons).entryList(
+        {"*.dll"}, QDir::Files | QDir::System | QDir::NoDotAndDotDot);
+    for (const QString &f : present) {
+        if (wanted.contains(f)) continue;
+        QFile::remove(dstAddons + "/" + f);
+        emit instanceOutput(accountId, QString("  Removed: addons/%1\n").arg(f));
+    }
+
+    int linked = 0, seeded = 0;
+    for (const auto &sel : acct.addonSelections) {
+        const QString src = srcAddons + "/" + sel.dll;
+        if (!QFile::exists(src)) {
+            emit instanceOutput(accountId,
+                QString("  Skipped %1 — not installed on the main account.\n").arg(sel.dll));
+            continue;
+        }
+        if (linkFile(accountId, src, dstAddons + "/" + sel.dll)) {
+            emit instanceOutput(accountId, QString("  Linked: addons/%1\n").arg(sel.dll));
+            ++linked;
+        }
+
+        if (!sel.copySettings || sel.dataDir.isEmpty()) continue;
+        const QString srcData = srcAddons + "/" + sel.dataDir;
+        const QString dstData = dstAddons + "/" + sel.dataDir;
+        if (!QDir(srcData).exists()) continue;
+        // Settings are seeded once. After that the alt owns them, unless this is
+        // an explicit resync.
+        if (!force && QDir(dstData).exists()) continue;
+        if (copyTree(accountId, srcData, dstData)) {
+            emit instanceOutput(accountId,
+                QString("  %1 settings: addons/%2\n")
+                    .arg(force ? "Resynced" : "Seeded", sel.dataDir));
+            ++seeded;
+        }
+    }
+
+    // arcdps is loaded through a shim Nexus keeps in its own folder.
+    if (wanted.contains("ArcDPS.dll")) {
+        const QString shim = "arcdps_integration64.dll";
+        if (QFile::exists(srcAddons + "/Nexus/" + shim)) {
+            QDir().mkpath(dstAddons + "/Nexus");
+            linkFile(accountId, srcAddons + "/Nexus/" + shim, dstAddons + "/Nexus/" + shim);
+        }
+    }
+
+    if (acct.copyNexusLayout) {
+        const QString srcNexus = srcAddons + "/Nexus";
+        const QString dstNexus = dstAddons + "/Nexus";
+        QDir().mkpath(dstNexus);
+        int copied = 0;
+        for (const QString &f : kNexusLayoutFiles) {
+            const QString s = srcNexus + "/" + f;
+            const QString d = dstNexus + "/" + f;
+            if (!QFile::exists(s)) continue;
+            if (!force && QFile::exists(d)) continue;
+            QFile::remove(d);
+            if (QFile::copy(s, d)) ++copied;
+        }
+        if (copied > 0) {
+            emit instanceOutput(accountId,
+                QString("  %1 Nexus layout and keybinds (%2 file(s)).\n")
+                    .arg(force ? "Resynced" : "Seeded").arg(copied));
+        }
+    }
+
+    QFile markerFile(marker);
+    if (markerFile.open(QIODevice::WriteOnly))
+        markerFile.close();
+
+    emit instanceOutput(accountId,
+        QString("Addons ready — %1 linked, %2 settings folder(s) copied.\n")
+            .arg(linked).arg(seeded));
+}
+
+QString ProcessManager::altGameDirFor(const QString &accountId, const QString &basePrefix,
+                                       const QString &exePath) const
+{
+    const QString accountDir = m_overlay->dataDir() + "/" + accountId;
+    if (exePath.startsWith(basePrefix + "/")) {
+        const QString clonePrefix = accountDir + "/prefix";
+        const QString relGameDir = QFileInfo(exePath.mid(basePrefix.length() + 1)).path();
+        return (relGameDir == ".") ? clonePrefix : clonePrefix + "/" + relGameDir;
+    }
+    return accountDir + "/game";
+}
+
+bool ProcessManager::resyncAddonSettings(const QString &accountId, const QString &basePrefix,
+                                          const QString &exePath)
+{
+    const auto acct = m_accounts->account(accountId);
+    if (acct.addonMode != AccountManager::AddonMode::Selected)
+        return false;
+
+    const QString destGameDir = altGameDirFor(accountId, basePrefix, exePath);
+    if (!QFile::exists(destGameDir + "/addons/.sir-launchalot"))
+        return false;   // nothing seeded yet; the next launch will do it
+
+    prepareSelectedAddons(accountId, QFileInfo(exePath).absolutePath(), destGameDir, acct, true);
+    return true;
 }
 
 QString ProcessManager::prepareStrippedGameDir(const QString &accountId,

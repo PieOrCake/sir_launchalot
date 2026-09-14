@@ -14,6 +14,7 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
 set(CORE_SOURCES
     src/core/OverlayManager.cpp
     src/core/AccountManager.cpp
+    src/core/AddonScanner.cpp
     src/core/WineManager.cpp
     src/core/InstallDetector.cpp
     src/core/ProcessManager.cpp
@@ -25,6 +26,7 @@ set(CORE_SOURCES
 set(CORE_HEADERS
     src/core/OverlayManager.h
     src/core/AccountManager.h
+    src/core/AddonScanner.h
     src/core/WineManager.h
     src/core/InstallDetector.h
     src/core/ProcessManager.h

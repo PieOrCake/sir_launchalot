@@ -32,6 +32,7 @@ protected:
 private slots:
     void onAddAccount();
     void onEditAccount();
+    void onResyncAddonSettings(const QString &accountId);
     void onRemoveAccount();
     void onSetupAccount();
     void onSetupComplete(const QString &accountId, bool success);

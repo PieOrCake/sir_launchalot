@@ -26,6 +26,20 @@ public:
         QStringList args;
     };
 
+    // How much of the main account's Nexus addon set an alt gets.
+    enum class AddonMode {
+        Off,        // no addons at all
+        All,        // the whole shared addon set, as installed on main
+        Selected    // only the addons listed in Account::addonSelections
+    };
+
+    // One addon an alt has been opted into. Only selected addons are stored.
+    struct AddonSelection {
+        QString dll;            // file name in main's addons folder
+        bool copySettings = true;
+        QString dataDir;        // settings folder name, empty when the addon has none
+    };
+
     struct Account {
         QString id;
         QString displayName;
@@ -36,7 +50,10 @@ public:
         QString password;           // GW2 login password (passed via -password flag)
         QString localDatPath;       // stored copy of Local.dat
         QString gfxSettingsPath;    // stored copy of GFXSettings
-        bool enableAddons = true;    // include addon DLLs when cloning prefix
+        bool enableAddons = true;    // legacy flag, kept in sync with addonMode
+        AddonMode addonMode = AddonMode::All;
+        QList<AddonSelection> addonSelections;  // used when addonMode == Selected
+        bool copyNexusLayout = true;  // seed imgui.ini / InputBinds.json from main
         QStringList extraArgs;      // additional GW2 command-line args
         QList<SidecarProgram> sidecars;
         QMap<QString, QString> envVars; // additional environment variables

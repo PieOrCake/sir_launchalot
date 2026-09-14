@@ -9,8 +9,9 @@
 #include <QProcessEnvironment>
 #include <QTimer>
 
+#include "core/AccountManager.h"
+
 class OverlayManager;
-class AccountManager;
 class WineManager;
 
 class ProcessManager : public QObject
@@ -57,6 +58,12 @@ public:
     QProcessEnvironment buildEnvironment(const QString &accountId,
                                           const QString &mergedPrefix) const;
 
+    // Re-copies addon settings from the main install over an alt's own copies,
+    // discarding anything changed on the alt. Returns false when the alt has no
+    // addon folder yet, in which case the next launch seeds it anyway.
+    bool resyncAddonSettings(const QString &accountId, const QString &basePrefix,
+                             const QString &exePath);
+
 signals:
     void instanceStarted(const QString &accountId);
     void instanceStopped(const QString &accountId);
@@ -95,6 +102,17 @@ private:
     // Builds (or refreshes) an addon-free copy of the game folder for an alt whose
     // install lives outside the Wine prefix. Returns the path, or empty on failure.
     QString prepareStrippedGameDir(const QString &accountId, const QString &sourceGameDir);
+    // Fills destGameDir/addons with symlinks to just the addons this alt has been
+    // opted into. Each addon's settings folder is seeded from the main install the
+    // first time it appears; force re-copies them over whatever the alt has.
+    void prepareSelectedAddons(const QString &accountId, const QString &sourceGameDir,
+                                const QString &destGameDir,
+                                const AccountManager::Account &acct, bool force);
+    // Where an alt's own copy of the game folder lives, for either install layout.
+    QString altGameDirFor(const QString &accountId, const QString &basePrefix,
+                           const QString &exePath) const;
+    bool linkFile(const QString &accountId, const QString &src, const QString &dest);
+    bool copyTree(const QString &accountId, const QString &src, const QString &dest);
     static QString uniqueAppId(const QString &accountId);
     void installDesktopEntry(const QString &accountId, const QString &displayName,
                               const QString &appId, const QString &badgeLabel);

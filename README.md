@@ -19,7 +19,8 @@ If an LLM creating software upsets you, then perhaps this repo isn't for you. Mo
 - **umu-launcher integration** — launches all accounts (main and alts) via `umu-run` with Proton, giving direct process control and reliable exit detection
 - **Multi-account launch** — tick the accounts you play together and launch them all from one button, spaced out by a configurable delay
 - **Automatic credential capture** — Setup Wizard walks you through logging in as each alt
-- **Per-account addon toggle** — enable or disable addons (ArcDPS, Nexus, etc.) per alt
+- **Per-account addon control** — give each alt no addons, all of them, or a hand-picked few
+- **Per-addon settings copying** — bring an addon's settings across from your main the first time an alt runs it, or start it fresh; a resync button re-copies them later
 - **Graphics settings persistence** — each alt remembers its own graphics settings between sessions
 - **Patch detection** — detects when GW2 updates and prompts to update alts
 - **External app launcher** — launch companion apps (Discord, TeamSpeak, etc.) from the same UI

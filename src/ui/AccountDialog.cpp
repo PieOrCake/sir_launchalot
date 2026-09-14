@@ -8,9 +8,11 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPointer>
 #include <QProcess>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QThreadPool>
 #include <QTableWidget>
 #include <QMessageBox>
 #include <QUuid>
@@ -109,9 +111,7 @@ void AccountDialog::setupUi()
     m_mainCheck = new QCheckBox;
     m_mainCheck->setVisible(false);
 
-    m_enableAddonsCheck = new QCheckBox("Enable addons");
-    m_enableAddonsCheck->setChecked(true);
-    layout->addWidget(m_enableAddonsCheck);
+    buildAddonSection(layout);
 
     // Launch command (shown for Steam accounts only)
     auto *cmdForm = new QFormLayout;
@@ -205,6 +205,208 @@ void AccountDialog::setupUi()
     layout->addWidget(buttons);
 }
 
+// Column layout of the addon picker.
+enum AddonColumn { ColAddon = 0, ColCopySettings, ColDataDir, ColSize, ColCount };
+
+void AccountDialog::buildAddonSection(QVBoxLayout *parent)
+{
+    m_addonGroup = new QGroupBox("Addons");
+    auto *box = new QVBoxLayout(m_addonGroup);
+
+    m_addonModeCombo = new QComboBox;
+    m_addonModeCombo->addItem("No addons", static_cast<int>(AccountManager::AddonMode::Off));
+    m_addonModeCombo->addItem("All addons", static_cast<int>(AccountManager::AddonMode::All));
+    m_addonModeCombo->addItem("Selected addons...",
+                              static_cast<int>(AccountManager::AddonMode::Selected));
+    m_addonModeCombo->setCurrentIndex(1);
+    box->addWidget(m_addonModeCombo);
+
+    m_addonPicker = new QWidget;
+    auto *pick = new QVBoxLayout(m_addonPicker);
+    pick->setContentsMargins(0, 0, 0, 0);
+
+    m_addonTable = new QTableWidget(0, ColCount);
+    m_addonTable->setHorizontalHeaderLabels({"Addon", "Copy settings", "Settings folder", "Size"});
+    m_addonTable->horizontalHeader()->setStretchLastSection(false);
+    m_addonTable->horizontalHeader()->setSectionResizeMode(ColAddon, QHeaderView::Stretch);
+    m_addonTable->verticalHeader()->setVisible(false);
+    m_addonTable->setSelectionMode(QAbstractItemView::NoSelection);
+    m_addonTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_addonTable->setMinimumHeight(260);
+    m_addonTable->setMaximumHeight(260);
+    m_addonTable->setMinimumWidth(560);
+    pick->addWidget(m_addonTable);
+
+    m_copyNexusLayoutCheck = new QCheckBox("Copy Nexus window layout and keybinds from main");
+    m_copyNexusLayoutCheck->setChecked(true);
+    m_copyNexusLayoutCheck->setToolTip(
+        "Window positions and keybinds are shared by every addon, so they are copied "
+        "as one. Seeded on this alt's first launch and left alone after that.");
+    pick->addWidget(m_copyNexusLayoutCheck);
+
+    auto *note = new QLabel(
+        "Settings are copied once, on this alt's first launch. After that the alt keeps "
+        "its own. The addons themselves are linked, not copied, so they stay up to date "
+        "with the main account.");
+    note->setWordWrap(true);
+    note->setStyleSheet("color: gray; font-size: 11px;");
+    pick->addWidget(note);
+
+    auto *btnRow = new QHBoxLayout;
+    m_resyncButton = new QPushButton("Resync settings from main");
+    m_resyncButton->setToolTip("Replace this alt's addon settings with the main account's.");
+    btnRow->addWidget(m_resyncButton);
+    btnRow->addStretch();
+    pick->addLayout(btnRow);
+
+    box->addWidget(m_addonPicker);
+    m_addonPicker->setVisible(false);
+    parent->addWidget(m_addonGroup);
+
+    connect(m_addonModeCombo, &QComboBox::currentIndexChanged, this, [this](int) {
+        applyAddonMode();
+    });
+
+    connect(m_resyncButton, &QPushButton::clicked, this, [this]() {
+        if (m_accountId.isEmpty()) {
+            QMessageBox::information(this, "Resync Addon Settings",
+                "Save this account first — settings are copied on its first launch.");
+            return;
+        }
+        auto answer = QMessageBox::question(this, "Resync Addon Settings",
+            "Replace this alt's addon settings with the main account's current ones?\n\n"
+            "Anything you have changed on this alt will be lost.");
+        if (answer == QMessageBox::Yes)
+            emit resyncAddonSettingsRequested(m_accountId);
+    });
+}
+
+void AccountDialog::applyAddonMode()
+{
+    const bool selected = m_addonModeCombo->currentData().toInt()
+                          == static_cast<int>(AccountManager::AddonMode::Selected);
+    m_addonPicker->setVisible(selected);
+    if (selected && m_addonTable->rowCount() == 0)
+        rebuildAddonTable();
+}
+
+void AccountDialog::setAddonsDir(const QString &dir)
+{
+    m_addonsDir = dir;
+    m_addons = AddonScanner::scan(dir);
+    m_dataDirChoices = AddonScanner::candidateDataDirs(dir);
+    rebuildAddonTable();
+    startSizeScan();
+}
+
+void AccountDialog::rebuildAddonTable()
+{
+    if (!m_addonTable) return;
+
+    // What was ticked before: either the account being edited, or whatever the
+    // user has already set in this dialog.
+    QHash<QString, AccountManager::AddonSelection> chosen;
+    if (m_haveAccountSelections) {
+        for (const auto &sel : m_pendingSelections)
+            chosen.insert(sel.dll, sel);
+        m_haveAccountSelections = false;
+    } else {
+        for (int r = 0; r < m_addonTable->rowCount(); ++r) {
+            auto *item = m_addonTable->item(r, ColAddon);
+            if (!item || item->checkState() != Qt::Checked) continue;
+            AccountManager::AddonSelection sel;
+            sel.dll = item->data(Qt::UserRole).toString();
+            auto *copyItem = m_addonTable->item(r, ColCopySettings);
+            sel.copySettings = copyItem && copyItem->checkState() == Qt::Checked;
+            if (auto *combo = qobject_cast<QComboBox *>(m_addonTable->cellWidget(r, ColDataDir)))
+                sel.dataDir = combo->currentData().toString();
+            chosen.insert(sel.dll, sel);
+        }
+    }
+
+    m_addonTable->setRowCount(m_addons.size());
+    for (int r = 0; r < m_addons.size(); ++r) {
+        const auto &addon = m_addons[r];
+        const bool isChosen = chosen.contains(addon.dll);
+        const auto sel = chosen.value(addon.dll);
+
+        auto *nameItem = new QTableWidgetItem(addon.displayName);
+        nameItem->setData(Qt::UserRole, addon.dll);
+        nameItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable);
+        nameItem->setCheckState(isChosen ? Qt::Checked : Qt::Unchecked);
+        nameItem->setToolTip(addon.dll);
+        m_addonTable->setItem(r, ColAddon, nameItem);
+
+        auto *copyItem = new QTableWidgetItem;
+        copyItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable);
+        copyItem->setCheckState((isChosen ? sel.copySettings : true) ? Qt::Checked
+                                                                     : Qt::Unchecked);
+        m_addonTable->setItem(r, ColCopySettings, copyItem);
+
+        auto *combo = new QComboBox;
+        combo->addItem("(none)", QString());
+        for (const QString &d : m_dataDirChoices)
+            combo->addItem(d, d);
+        const QString want = isChosen ? sel.dataDir : addon.dataDir;
+        const int idx = combo->findData(want);
+        combo->setCurrentIndex(idx >= 0 ? idx : 0);
+        if (addon.dataDir.isEmpty() && want.isEmpty()) {
+            combo->setToolTip("No settings folder detected for this addon. "
+                              "Pick one if it keeps settings under a different name.");
+        }
+        m_addonTable->setCellWidget(r, ColDataDir, combo);
+
+        auto *sizeItem = new QTableWidgetItem;
+        sizeItem->setFlags(Qt::ItemIsEnabled);
+        m_addonTable->setItem(r, ColSize, sizeItem);
+
+        connect(combo, &QComboBox::currentIndexChanged, this, [this, r](int) {
+            auto *combo = qobject_cast<QComboBox *>(m_addonTable->cellWidget(r, ColDataDir));
+            auto *item = m_addonTable->item(r, ColSize);
+            if (!combo || !item) return;
+            const QString dir = combo->currentData().toString();
+            item->setText(dir.isEmpty() ? QString()
+                                        : AddonScanner::formatSize(m_dataDirSizes.value(dir, -1)));
+        });
+    }
+
+    m_addonTable->resizeColumnsToContents();
+    m_addonTable->horizontalHeader()->setSectionResizeMode(ColAddon, QHeaderView::Stretch);
+
+    // Fill in whatever sizes are already known.
+    for (int r = 0; r < m_addonTable->rowCount(); ++r) {
+        auto *combo = qobject_cast<QComboBox *>(m_addonTable->cellWidget(r, ColDataDir));
+        auto *item = m_addonTable->item(r, ColSize);
+        if (!combo || !item) continue;
+        const QString dir = combo->currentData().toString();
+        if (!dir.isEmpty() && m_dataDirSizes.contains(dir))
+            item->setText(AddonScanner::formatSize(m_dataDirSizes.value(dir)));
+    }
+}
+
+void AccountDialog::startSizeScan()
+{
+    if (m_addonsDir.isEmpty() || m_dataDirChoices.isEmpty()) return;
+
+    const QString dir = m_addonsDir;
+    const QStringList names = m_dataDirChoices;
+    QPointer<AccountDialog> guard(this);
+
+    // Walking every settings folder touches tens of thousands of files, so it
+    // happens off the UI thread and the sizes appear as they are worked out.
+    QThreadPool::globalInstance()->start([dir, names, guard]() {
+        QHash<QString, qint64> sizes;
+        for (const QString &name : names)
+            sizes.insert(name, AddonScanner::directorySize(dir + "/" + name));
+        if (!guard) return;
+        QMetaObject::invokeMethod(guard, [guard, sizes]() {
+            if (!guard) return;
+            guard->m_dataDirSizes = sizes;
+            guard->rebuildAddonTable();
+        }, Qt::QueuedConnection);
+    });
+}
+
 void AccountDialog::refreshSidecarTable()
 {
     m_sidecarTable->setRowCount(m_sidecars.size());
@@ -233,8 +435,14 @@ void AccountDialog::setAccount(const AccountManager::Account &account)
     if (account.isSteam) {
         setSteamMode(account.launchCommand);
     } else {
-        m_enableAddonsCheck->setChecked(account.enableAddons);
-        m_enableAddonsCheck->setVisible(!account.isMain);
+        const int idx = m_addonModeCombo->findData(static_cast<int>(account.addonMode));
+        m_addonModeCombo->setCurrentIndex(idx >= 0 ? idx : 1);
+        m_copyNexusLayoutCheck->setChecked(account.copyNexusLayout);
+        m_pendingSelections = account.addonSelections;
+        m_haveAccountSelections = true;
+        rebuildAddonTable();
+        applyAddonMode();
+        m_addonGroup->setVisible(!account.isMain);
     }
 
     m_apiKeyEdit->setText(account.apiKey);
@@ -249,7 +457,7 @@ void AccountDialog::setAccount(const AccountManager::Account &account)
 void AccountDialog::setSteamMode(const QString &defaultCommand)
 {
     m_steamMode = true;
-    m_enableAddonsCheck->setVisible(false);
+    m_addonGroup->setVisible(false);
     m_launchCommandEdit->setVisible(true);
     m_launchCommandLabel->setVisible(true);
     m_launchCommandEdit->setText(defaultCommand);
@@ -265,7 +473,28 @@ AccountManager::Account AccountDialog::account() const
     acct.isMain = m_mainCheck->isChecked();
     acct.isSteam = m_steamMode;
     acct.launchCommand = m_launchCommandEdit->text().trimmed();
-    acct.enableAddons = m_enableAddonsCheck->isChecked();
+    acct.addonMode = static_cast<AccountManager::AddonMode>(
+        m_addonModeCombo->currentData().toInt());
+    acct.enableAddons = acct.addonMode != AccountManager::AddonMode::Off;
+    acct.copyNexusLayout = m_copyNexusLayoutCheck->isChecked();
+
+    // The ticks are kept even when the mode is not Selected, so switching away
+    // and back does not lose them.
+    if (m_addonTable->rowCount() > 0) {
+        for (int r = 0; r < m_addonTable->rowCount(); ++r) {
+            auto *item = m_addonTable->item(r, ColAddon);
+            if (!item || item->checkState() != Qt::Checked) continue;
+            AccountManager::AddonSelection sel;
+            sel.dll = item->data(Qt::UserRole).toString();
+            auto *copyItem = m_addonTable->item(r, ColCopySettings);
+            sel.copySettings = copyItem && copyItem->checkState() == Qt::Checked;
+            if (auto *combo = qobject_cast<QComboBox *>(m_addonTable->cellWidget(r, ColDataDir)))
+                sel.dataDir = combo->currentData().toString();
+            acct.addonSelections.append(sel);
+        }
+    } else {
+        acct.addonSelections = m_pendingSelections;
+    }
     acct.apiKey = m_apiKeyEdit->text().trimmed();
     acct.showAccountName = m_showAccountNameCheck->isChecked();
     acct.showDailyVault = m_showDailyVaultCheck->isChecked();

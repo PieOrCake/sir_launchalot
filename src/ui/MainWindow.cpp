@@ -861,6 +861,10 @@ void MainWindow::onEditAccount()
 
     AccountDialog dlg(this);
     dlg.setBasePrefix(m_accountManager->basePrefix());
+    if (!m_gw2ExePath.isEmpty())
+        dlg.setAddonsDir(QFileInfo(m_gw2ExePath).absolutePath() + "/addons");
+    connect(&dlg, &AccountDialog::resyncAddonSettingsRequested, this,
+            [this](const QString &id) { onResyncAddonSettings(id); });
     dlg.setAccount(acct);
     if (dlg.exec() == QDialog::Accepted) {
         auto updated = dlg.account();
@@ -878,6 +882,25 @@ void MainWindow::onEditAccount()
             fetchApiData();
             refreshAccountList();
         }
+    }
+}
+
+void MainWindow::onResyncAddonSettings(const QString &accountId)
+{
+    if (m_basePrefix.isEmpty() || m_gw2ExePath.isEmpty()) {
+        QMessageBox::warning(this, "Resync Addon Settings",
+            "No Guild Wars 2 installation is configured yet.");
+        return;
+    }
+
+    if (m_processManager->resyncAddonSettings(accountId, m_basePrefix, m_gw2ExePath)) {
+        appendLog("Resynced addon settings from the main account.");
+        QMessageBox::information(this, "Resync Addon Settings",
+            "Addon settings copied from the main account.");
+    } else {
+        QMessageBox::information(this, "Resync Addon Settings",
+            "This alt has no addon folder yet. Its settings will be copied "
+            "from the main account the next time it launches.");
     }
 }
 

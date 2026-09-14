@@ -2,12 +2,18 @@
 #define ACCOUNTDIALOG_H
 
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDialog>
+#include <QGroupBox>
+#include <QHash>
 #include <QLineEdit>
 #include <QList>
+#include <QPushButton>
 #include <QTableWidget>
+#include <QVBoxLayout>
 
 #include "core/AccountManager.h"
+#include "core/AddonScanner.h"
 
 class AccountDialog : public QDialog
 {
@@ -19,10 +25,20 @@ public:
     void setAccount(const AccountManager::Account &account);
     void setSteamMode(const QString &defaultCommand);
     void setBasePrefix(const QString &prefix);
+    // Main account's addons folder; enables the per-addon picker.
+    void setAddonsDir(const QString &dir);
     AccountManager::Account account() const;
+
+signals:
+    // Asks the owner to re-copy this alt's addon settings from the main install.
+    void resyncAddonSettingsRequested(const QString &accountId);
 
 private:
     void setupUi();
+    void buildAddonSection(QVBoxLayout *parent);
+    void rebuildAddonTable();
+    void applyAddonMode();
+    void startSizeScan();
 
     bool m_editMode = false;
     bool m_steamMode = false;
@@ -31,7 +47,21 @@ private:
     QLineEdit *m_nameEdit;
     QLineEdit *m_argsEdit;
     QCheckBox *m_mainCheck;
-    QCheckBox *m_enableAddonsCheck;
+
+    // Addons
+    QString m_addonsDir;
+    QGroupBox *m_addonGroup = nullptr;
+    QComboBox *m_addonModeCombo = nullptr;
+    QWidget *m_addonPicker = nullptr;
+    QTableWidget *m_addonTable = nullptr;
+    QCheckBox *m_copyNexusLayoutCheck = nullptr;
+    QPushButton *m_resyncButton = nullptr;
+    QList<AddonScanner::AddonInfo> m_addons;
+    QStringList m_dataDirChoices;
+    QHash<QString, qint64> m_dataDirSizes;   // folder name -> bytes
+    // Selections carried in from setAccount() before the folder has been scanned.
+    QList<AccountManager::AddonSelection> m_pendingSelections;
+    bool m_haveAccountSelections = false;
     QLineEdit *m_launchCommandEdit;
     QWidget *m_launchCommandLabel;
     QLineEdit *m_apiKeyEdit;
