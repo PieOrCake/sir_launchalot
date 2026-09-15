@@ -51,28 +51,43 @@ set(UI_HEADERS
     src/ui/SetupWizard.h
 )
 
-add_executable(sir-launchalot
-    src/main.cpp
+# Everything except main() lives in a static library so the test harnesses in
+# tests/ can link the real code instead of keeping their own source lists.
+add_library(sir-launchalot-lib STATIC
     ${CORE_SOURCES}
     ${CORE_HEADERS}
     ${UI_SOURCES}
     ${UI_HEADERS}
 )
 
-target_include_directories(sir-launchalot PRIVATE
+target_include_directories(sir-launchalot-lib PUBLIC
     ${CMAKE_SOURCE_DIR}/src
 )
 
-target_link_libraries(sir-launchalot PRIVATE
+target_link_libraries(sir-launchalot-lib PUBLIC
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
     Qt6::Network
 )
 
-target_compile_definitions(sir-launchalot PRIVATE
+target_compile_definitions(sir-launchalot-lib PUBLIC
     APP_VERSION="${PROJECT_VERSION}"
 )
+
+add_executable(sir-launchalot
+    src/main.cpp
+)
+
+target_link_libraries(sir-launchalot PRIVATE sir-launchalot-lib)
+
+# Test harnesses. Off by default so the normal build stays a plain app build;
+# tests/run-tests.sh turns it on in its own build directory.
+option(BUILD_TESTS "Build the test harnesses in tests/" OFF)
+if(BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
 
 # Always package an AppImage after building
 add_custom_target(appimage ALL

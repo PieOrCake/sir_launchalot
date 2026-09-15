@@ -110,6 +110,14 @@ The AppImage will be created at `build/Sir_Launchalot-<version>-x86_64.AppImage`
 - Qt6 (Core, Gui, Widgets, Network)
 - A C++17 compiler
 
+### Tests
+
+```bash
+./tests/run-tests.sh
+```
+
+See [tests/README.md](tests/README.md) for what they cover.
+
 ## License
 
 This project is licensed under the [GNU General Public License v3.0](LICENSE).
