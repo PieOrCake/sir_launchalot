@@ -10,8 +10,17 @@ If an LLM creating software upsets you, then perhaps this repo isn't for you. Mo
 
 ## Screenshots
 
+The main window — every account, its Wizard's Vault progress, and one button to launch the ones you play together.
+
 ![Main Window](screenshots/main_window.png)
-![Edit Account](screenshots/edit.png)
+
+Pick which of your main's addons an alt runs, and which settings come across with them.
+
+![Addons](screenshots/addons.png)
+
+Add a GW2 API key to show account name, Wizard's Vault progress, and last seen time.
+
+![GW2 API](screenshots/api.png)
 
 ## Features
 
